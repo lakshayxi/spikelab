@@ -1,22 +1,32 @@
-import streamlit as st
+import matplotlib
 import numpy as np
 import pandas as pd
-import matplotlib
+import streamlit as st
+
 matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec
-from matplotlib.transforms import Bbox
-from io import BytesIO
 import warnings
+from io import BytesIO
+
+import matplotlib.gridspec as gridspec
+import matplotlib.pyplot as plt
+from matplotlib.transforms import Bbox
+
 warnings.filterwarnings('ignore')
 
-from parsers import parse_raw_content, parse_neuroexplorer_content, stitch_segments
-from processing import (
-    bandpass_filter, detect_spikes,
-    max_interval_method, logisi_method, compare_methods,
-    extract_waveforms, build_summary_df,
-    compute_spike_widths, compute_isi_arrays, compute_burst_amplitude_stats,
-    compute_intraburst_decrement, burst_membership_mask,
+from parsers import parse_neuroexplorer_content, parse_raw_content, stitch_segments  # noqa: E402
+from processing import (  # noqa: E402
+    bandpass_filter,
+    build_summary_df,
+    burst_membership_mask,
+    compare_methods,
+    compute_burst_amplitude_stats,
+    compute_intraburst_decrement,
+    compute_isi_arrays,
+    compute_spike_widths,
+    detect_spikes,
+    extract_waveforms,
+    logisi_method,
+    max_interval_method,
 )
 
 # ── Page config ───────────────────────────────────────────────────────────────
@@ -299,7 +309,7 @@ def plot_bursts(spike_times, bursts, p2p, valid_times):
     in_burst  = [p2p[i] for i in range(len(p2p)) if i     in burst_spike_set]
     out_burst = [p2p[i] for i in range(len(p2p)) if i not in burst_spike_set]
     data = [d for d in [in_burst, out_burst] if d]
-    box_lbls = [l for l, d in zip(['In-burst', 'Isolated'], [in_burst, out_burst]) if d]
+    box_lbls = [lbl for lbl, d in zip(['In-burst', 'Isolated'], [in_burst, out_burst]) if d]
     if data:
         bp = ax3.boxplot(data, tick_labels=box_lbls, patch_artist=True,
                          medianprops=dict(color=C_TEXT, linewidth=2))
@@ -321,7 +331,7 @@ def plot_amplitude_burst_membership(p2p, in_burst_mask):
     in_burst  = p2p[in_burst_mask]
     out_burst = p2p[~in_burst_mask]
     data     = [d for d in [in_burst, out_burst] if len(d)]
-    box_lbls = [l for l, d in zip(['In-burst', 'Isolated'], [in_burst, out_burst]) if len(d)]
+    box_lbls = [lbl for lbl, d in zip(['In-burst', 'Isolated'], [in_burst, out_burst]) if len(d)]
 
     fig, ax = plt.subplots(figsize=(5, 4.5), facecolor=C_BG)
     style_ax(ax, 'Amplitude: In-Burst vs Isolated Spikes')

@@ -4,7 +4,7 @@ import numpy as np
 def parse_raw_content(content: bytes):
     """Parse raw voltage trace: two-column [time, voltage], auto-detects tab or comma delimiter."""
     text = content.decode('utf-8', errors='ignore')
-    sample = next((l for l in text.splitlines() if l.strip()), '')
+    sample = next((ln for ln in text.splitlines() if ln.strip()), '')
     delimiter = ',' if ',' in sample and '\t' not in sample else '\t'
     times, voltages = [], []
     for line in text.splitlines():
