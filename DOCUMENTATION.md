@@ -228,7 +228,7 @@ Runs both methods on the same spike train and quantifies their agreement using t
 
 ## 9. Tab-by-Tab Reference
 
-Every figure can be downloaded as a combined PNG (the full multi-panel figure as shown) **and**, where a figure has multiple panels, each individual panel can also be downloaded separately via a small "⬇️" button beneath the figure — useful when you only need one panel for a slide or figure, not the whole composite.
+Every figure can be downloaded as a combined PNG (the full multi-panel figure as shown) **and**, where a figure has multiple panels, each individual panel can also be downloaded separately via a small download button beneath the figure — useful when you only need one panel for a slide or figure, not the whole composite.
 
 ### Overview
 Two panels: a **spike raster** (every detected/supplied spike plotted as a tick mark over time, with detected burst windows shaded and labeled), and the **instantaneous firing rate** over the same timeline. Gives an immediate visual sense of the recording's overall activity pattern and where bursts occur.
@@ -298,7 +298,7 @@ The "Generate Methods Text" button produces a ready-to-paste methods paragraph t
 The generated paragraph is shown in a text box for you to copy directly into a manuscript.
 
 ### Figure export
-Every figure can be downloaded as a single combined PNG. Multi-panel figures additionally offer per-panel PNG downloads (the small "⬇️" buttons beneath the figure), for when you need just one panel for a slide or manuscript figure rather than the full composite.
+Every figure can be downloaded as a single combined PNG. Multi-panel figures additionally offer per-panel PNG downloads (small download buttons beneath the figure), for when you need just one panel for a slide or manuscript figure rather than the full composite.
 
 ### Data export
 The full per-spike Data Table can be downloaded as a CSV file, containing every spike's timestamp, amplitude, SNR, burst membership, spike width, and ISI values for further analysis outside the tool.

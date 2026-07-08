@@ -1,7 +1,20 @@
-# 🧠 MEA Spike Analyser
+# MEA Spike Analyser
 
-Offline tool for Multi-Electrode Array spike detection, burst analysis, and amplitude quantification.  
+Offline tool for Multi-Electrode Array spike detection, burst analysis, and amplitude quantification.
 Implements peer-reviewed burst detection methods ranked by Cotterill et al. (2016).
+
+For the complete reference manual — every parameter, algorithm, formula, and plot explained — see [DOCUMENTATION.md](DOCUMENTATION.md).
+
+---
+
+## Key Features
+
+- Spike detection with an adjustable, noise-floor-relative threshold
+- Two peer-reviewed burst detection methods (Max Interval, logISI Adaptive), runnable individually or side by side for comparison
+- Full amplitude, waveform-shape, and burst-dynamics analysis suite (attenuation index, intra-burst decrement, burst-level correlations, and more)
+- Multi-segment file upload with automatic time-based stitching, for recordings exported in sequential chunks
+- Optional NeuroExplorer import
+- Publication-ready exports: combined and per-panel figure downloads, full spike-level CSV export, and an auto-generated methods-section paragraph
 
 ---
 
@@ -33,50 +46,7 @@ streamlit run app.py
 
 ---
 
-## Burst Detection Methods
-
-Two peer-reviewed methods are available. You can run either or both simultaneously.
-
-### Max Interval — Cotterill et al. (2016)  *recommended*
-> Cotterill, E., et al. (2016). *A comparison of computational methods for detecting bursts in neuronal spike trains and their application to human stem cell-derived neuronal networks.* Journal of Neurophysiology, 116(2), 306–321.
-
-Ranked **#1 of 8** burst detection methods across 11 desirable properties.  
-Uses five independently tuneable parameters:
-
-| Parameter | Default | Meaning |
-|---|---|---|
-| Max beginning ISI | 170 ms | Maximum ISI that opens a burst |
-| Max end ISI | 300 ms | Maximum ISI that continues a burst |
-| Min interburst interval | 200 ms | Minimum gap between separate bursts |
-| Min burst duration | 10 ms | Shortest event counted as a burst |
-| Min spikes per burst | 3 | Minimum event count |
-
-### logISI Adaptive — Pasquale et al. (2010)
-> Pasquale, V., et al. (2010). *A self-adapting approach for the detection of bursts and network bursts in neuronal cultures.* Journal of Computational Neuroscience, 29(1–2), 213–229.
-
-Data-driven: derives the ISI threshold automatically from the logarithmic ISI histogram.
-
-1. Bins ISIs in log₁₀ space (bin width = 0.1)
-2. Smooths with a Gaussian kernel (σ = 1 bin)
-3. Finds two principal peaks: intra-burst (< 100 ms) and inter-burst (≥ 100 ms)
-4. Computes the **void parameter** between peaks:  
-   `void = 1 − g(min) / √(g(peak₁) × g(peak₂))`
-5. If void > threshold (default 0.7): sets ISIth at the histogram minimum
-6. If ISIth > 100 ms: uses dual-threshold detection (100 ms for burst cores, ISIth to extend boundaries)
-7. If no bimodal structure found: falls back to 100 ms Max Interval
-
-### Both — compare methods
-Runs both methods and computes the **normalised Hamming distance** (fraction of 50 ms bins where they disagree):
-
-| Hamming distance | Interpretation |
-|---|---|
-| < 5% | Strong agreement ✅ — burst calls are robust |
-| 5–10% | Moderate agreement ⚠️ — broadly consistent |
-| > 10% | Poor agreement ❌ — review parameters or ISI structure |
-
----
-
-## How to use
+## Quick Start
 
 1. Upload your **raw data file** (two columns: time in seconds, voltage in µV)
 2. Optionally upload your **NeuroExplorer export** to use its spike timestamps
@@ -87,42 +57,21 @@ Runs both methods and computes the **normalised Hamming distance** (fraction of 
 
 ---
 
-## Parameters explained
+## Burst Detection Methods
 
-| Parameter | What it does | Default |
-|---|---|---|
-| Threshold (× σ) | Spike detection: multiples of noise floor | 5.0 |
-| Bandpass low/high | Frequency range kept after filtering | 300–3000 Hz |
-| Burst detection method | MI, logISI, or both | Max Interval |
-| Void parameter threshold | Minimum separation quality for logISI | 0.7 |
-| Min spikes/burst | Minimum spikes to count as a burst | 3 |
-| Pre/post window | Waveform cut around each spike | 1 ms / 2 ms |
+Two peer-reviewed methods are available, runnable individually or together for comparison.
 
----
+**Max Interval** — Cotterill et al. (2016), J Neurophysiol. Ranked #1 of 8 burst detection methods across 11 desirable properties. Uses five independently tuneable parameters (beginning/end ISI thresholds, interburst interval, minimum duration, minimum spike count).
 
-## Output tabs
+**logISI Adaptive** — Pasquale et al. (2010), J Comput Neurosci. Data-driven: derives its ISI threshold automatically from the shape of the recording's own ISI distribution, rather than requiring a fixed value.
 
-| Tab | Contents |
-|---|---|
-| Overview | Spike raster and instantaneous firing rate |
-| ISI Analysis | Inter-spike interval histogram (linear + log), coloured by threshold |
-| Amplitude | All waveforms overlaid, trough and P2P distributions, amplitude over time |
-| Bursts | Per-burst duration/spike count, in-burst vs isolated spike amplitudes |
-| logISI Histogram | Log-space ISI histogram with detected peaks, void parameter, and (in Both mode) a side-by-side comparison raster |
-| Data Table | Every spike with timestamp, trough, P2P, SNR, and burst membership |
+Running both methods together computes their agreement via normalised Hamming distance. See [DOCUMENTATION.md](DOCUMENTATION.md#8-burst-detection-methods--algorithm-details) for the full algorithm details, formulas, and agreement thresholds.
 
 ---
 
-## File formats supported
+## Parameters, Output Tabs, and File Formats
 
-**Raw data file** — tab- or comma-separated, two columns:
-```
-1.358   -1.192096
-1.35804 -0.596048
-```
-Exported from Multi Channel Analyzer as "Raw Data Time Points".
-
-**NeuroExplorer export** — standard ASCII export with Instantaneous Parameters section.
+Every sidebar parameter (with ranges and defaults), every output tab, and both supported input file formats (raw Multi Channel Analyzer export, with multi-segment auto-stitching, and NeuroExplorer export) are documented in full in [DOCUMENTATION.md](DOCUMENTATION.md).
 
 ---
 
