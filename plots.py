@@ -497,7 +497,8 @@ def plot_comparison_raster(spike_times, bursts_mi, bursts_logisi, hamming_pct, a
     agreement_clean = _strip_emoji(agreement)
     fig, axes = plt.subplots(2, 1, figsize=(14, 5), facecolor=C_BG, sharex=True)
     fig.suptitle(
-        f'Burst Detection Comparison — {agreement_clean}  (Hamming = {hamming_pct:.1f}%)',
+        f'Burst Detection Comparison — {agreement_clean}  '
+        f'(Hamming distance = {hamming_pct:.1f}%)',
         color=C_TEXT, fontsize=11, fontweight='bold'
     )
     for ax, bursts, color, title in [
@@ -538,5 +539,46 @@ def plot_raw_trace(t, v, label, color, max_points=50_000):
     ax.set_xlabel('Time (s)', fontsize=9)
     ax.set_ylabel('Voltage (µV)', fontsize=9)
     ax.set_xlim(t_plot[0], t_plot[-1])
+    fig.tight_layout()
+    return fig
+
+
+def plot_spike_waveforms(waveforms, t_axis, max_waveforms=500):
+    """Plot NeuroExplorer-supplied spike snippets and their all-spike mean.
+
+    A deterministic, evenly spaced subset keeps the figure responsive for
+    channels with many spikes; the mean and standard deviation still use every
+    supplied waveform.
+    """
+    n_waveforms = len(waveforms)
+    if n_waveforms > max_waveforms:
+        shown_indices = np.linspace(0, n_waveforms - 1, max_waveforms, dtype=int)
+        shown = waveforms[shown_indices]
+        subset_note = f"showing {len(shown):,} of {n_waveforms:,}"
+    else:
+        shown = waveforms
+        subset_note = f"{n_waveforms:,} supplied"
+
+    mean_waveform = waveforms.mean(axis=0)
+    std_waveform = waveforms.std(axis=0)
+
+    fig, ax = plt.subplots(figsize=(14, 5), facecolor=C_BG)
+    style_ax(ax, f'Supplied Spike Waveforms ({subset_note})')
+    ax.plot(t_axis, shown.T, color=C_SPIKE, alpha=0.08, linewidth=0.45)
+    ax.fill_between(
+        t_axis,
+        mean_waveform - std_waveform,
+        mean_waveform + std_waveform,
+        color=C_MUTED,
+        alpha=0.18,
+        label='Mean ± 1 SD (all spikes)',
+    )
+    ax.plot(t_axis, mean_waveform, color=C_TEXT, linewidth=2.2, label='Mean (all spikes)', zorder=5)
+    ax.axvline(0, color=C_MUTED, linewidth=0.8, linestyle=':')
+    ax.axhline(0, color=C_GRID, linewidth=0.8)
+    ax.set_xlabel('Time from spike timestamp (ms)', fontsize=9)
+    ax.set_ylabel('Voltage (µV)', fontsize=9)
+    ax.set_xlim(t_axis[0], t_axis[-1])
+    ax.legend(fontsize=8, facecolor=C_PANEL, edgecolor=C_GRID)
     fig.tight_layout()
     return fig

@@ -228,6 +228,7 @@ def parse_edf_content(content: bytes, channel_index: int = None):
 def stitch_segments(segments):
     """Sort (t, v) segment arrays by first timestamp and concatenate, trimming overlaps."""
     order = sorted(range(len(segments)), key=lambda i: segments[i][0][0])
+    nominal_period = float(np.median(np.concatenate([np.diff(t) for t, _ in segments])))
     t0, v0 = segments[order[0]]
     stitched_t, stitched_v = [t0], [v0]
     summary = [{'segment_index': order[0], 'first_t': float(t0[0]), 'last_t': float(t0[-1]),
@@ -240,10 +241,18 @@ def stitch_segments(segments):
         summary.append({'segment_index': idx, 'first_t': float(t[0]), 'last_t': float(t[-1]),
                          'n_samples': len(t), 'n_kept': len(kept_t),
                          'overlap_s': float(max(0.0, last_t - t[0])), 'overlap_samples': int(cut)})
+        if not len(kept_t):
+            continue
+        boundary_interval = float(kept_t[0] - last_t)
+        if boundary_interval > 1.5 * nominal_period:
+            raise ValueError(
+                f"Recording gap detected before segment {idx + 1}: boundary interval "
+                f"{boundary_interval:g} s exceeds 1.5 times the expected nominal sample "
+                f"period of {nominal_period:g} s."
+            )
         stitched_t.append(kept_t)
         stitched_v.append(kept_v)
-        if len(kept_t):
-            last_t = kept_t[-1]
+        last_t = kept_t[-1]
     return np.concatenate(stitched_t), np.concatenate(stitched_v), summary
 
 

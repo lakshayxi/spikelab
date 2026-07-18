@@ -68,7 +68,7 @@ Two peer-reviewed methods are available, runnable individually or together for c
 
 **logISI Adaptive** — Pasquale et al. (2010), J Comput Neurosci. Data-driven: derives its ISI threshold automatically from the shape of the recording's own ISI distribution, rather than requiring a fixed value.
 
-Running both methods together computes their agreement via normalised Hamming distance. See [DOCUMENTATION.md](DOCUMENTATION.md#8-burst-detection-methods--algorithm-details) for the full algorithm details, formulas, and agreement thresholds.
+Running both methods together compares their 50 ms-bin burst occupancy via normalised Hamming distance and labels the occupancy agreement as high, moderate, or low. See [DOCUMENTATION.md](DOCUMENTATION.md#8-burst-detection-methods--algorithm-details) for the full algorithm details, formula, and interpretation thresholds.
 
 ---
 

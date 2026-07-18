@@ -113,7 +113,9 @@ The format uses **one literal ASCII space per field boundary** and reserves an a
 
 Only populated channels are listed. The selector shows the concise electrode ID (for example, `A4`), complete original source label, spike count, and waveform availability. One selected electrode feeds the existing single-channel analysis; the app does not calculate network statistics.
 
-Waveform exports do not encode amplitude units. The unit selector therefore defaults to **mV**, also offering µV and V, and all selected-channel waveforms are normalized to µV. These files use the confirmed **25 kHz** waveform sampling rate with 76 samples spanning **−1.0 ms through +2.0 ms** (25 pre-spike samples). The recording duration defaults to the latest timestamp across all populated channels—not merely the selected channel's spike span. It is editable upward, but cannot be shorter than the data. This duration is used for mean firing rate and 50 ms-bin burst-method agreement.
+Waveform exports do not encode amplitude units. The unit selector therefore defaults to **mV**, also offering µV and V, and all selected-channel waveforms are normalized to µV. These files use the confirmed **25 kHz** waveform sampling rate with 76 samples spanning **−1.0 ms through +2.0 ms** (25 pre-spike samples). The recording duration defaults to the latest timestamp across all populated channels—not merely the selected channel's spike span. It is editable upward, but cannot be shorter than the data. This duration is used for mean firing rate and the 50 ms-bin burst-occupancy comparison.
+
+When the selected channel contains waveform samples, the app provides a dedicated **Spike Waveforms** tab. It overlays the supplied snippets and shows the all-spike mean with a ±1 standard-deviation band. This is not a reconstructed continuous trace: the export contains no continuous raw voltage, so there is no raw-versus-filtered toggle and the snippets are not filtered again.
 
 ### NeuroExplorer spike-time overlay (optional)
 
@@ -229,13 +231,13 @@ A data-driven method that derives its own ISI threshold from the recording's own
 
 ### Both — compare methods
 
-Runs both methods on the same spike train and quantifies their agreement using the **normalized Hamming distance** (as described in Cotterill et al. 2016): the recording is divided into 50 ms bins, each bin is marked "in a burst" or not according to each method independently, and the Hamming distance is the percentage of bins where the two methods disagree.
+Runs both methods on the same spike train and compares their burst occupancy using the **normalized Hamming distance** (as described in Cotterill et al. 2016): the recording is divided into 50 ms bins, each bin is marked "in a burst" or not according to each method independently, and the Hamming distance is the percentage of bins where the two methods disagree.
 
 | Hamming distance | Interpretation |
 |---|---|
-| < 5% | Strong agreement — burst calls are robust |
-| 5% – 10% | Moderate agreement — broadly consistent |
-| > 10% | Poor agreement — review parameters or ISI structure |
+| < 5% | High agreement on burst occupancy |
+| 5% – 10% | Moderate agreement on burst occupancy |
+| > 10% | Low agreement on burst occupancy — review parameters or ISI structure |
 
 ---
 
@@ -248,6 +250,13 @@ Two panels: a **spike raster** (every detected/supplied spike plotted as a tick 
 
 ### Raw Trace
 The continuous voltage trace, with a toggle to switch between the **raw (unfiltered)** and **bandpass-filtered** signal. Long traces are automatically downsampled for display (with the downsampling factor noted in the title) so the plot stays responsive; the underlying analysis always uses the full-resolution data regardless of the display downsampling. Use this tab to sanity-check the recording itself — confirm the electrode wasn't saturated or flat, and see what the bandpass filter removed versus preserved.
+
+This tab is available for continuous text/CSV and EDF inputs. A standalone NeuroExplorer multichannel export has no continuous voltage trace, so it uses the Spike Waveforms tab below when snippets are available.
+
+### Spike Waveforms
+Available only when the selected standalone NeuroExplorer multichannel channel contains bundled waveform samples. The figure overlays the supplied 76-sample spike snippets and highlights the mean waveform with a ±1 standard-deviation band on the confirmed 25 kHz, −1.0 to +2.0 ms axis. Up to 500 evenly spaced snippets are drawn for responsiveness; the summary curve and band use all spikes. Values are displayed in µV after applying the selected source-unit conversion.
+
+The snippets were already extracted by NeuroExplorer. They are not a continuous raw recording, cannot be used to reconstruct a raw-versus-filtered trace, and are not bandpass-filtered again by this app.
 
 ### ISI Analysis
 Two histograms of inter-spike intervals — linear and log-scaled counts — colored by whether each ISI falls below the active burst-detection threshold. Reports mean ISI overall, mean intra-burst ISI, and mean inter-burst ISI.
@@ -277,7 +286,7 @@ Three panels:
 - **Amplitude vs. following ISI** — the complementary check, whether a spike's amplitude predicts the timing of the next spike.
 
 ### logISI Histogram
-The log-scaled ISI histogram used by the logISI Adaptive method, showing the Gaussian-smoothed curve, the detected intra-burst and inter-burst peaks, and the resulting threshold (or the 100 ms fallback, if applicable). This is shown even when Max Interval is the active detection method, purely for inspection of the recording's ISI structure. When "Both" is selected, an additional **comparison raster** shows the Max Interval and logISI burst calls stacked over the same spike train, letting you visually inspect where the two methods agree or disagree.
+The log-scaled ISI histogram used by the logISI Adaptive method, showing the Gaussian-smoothed curve, the detected intra-burst and inter-burst peaks, and the resulting threshold (or the 100 ms fallback, if applicable). This is shown even when Max Interval is the active detection method, purely for inspection of the recording's ISI structure. When "Both" is selected, an additional **comparison raster** shows the Max Interval and logISI burst calls stacked over the same spike train, letting you visually inspect where their burst occupancy matches or differs.
 
 ### Data Table
 A complete per-spike table: spike number, timestamp, trough amplitude, peak-to-peak amplitude, SNR where applicable, burst membership, spike width, and preceding/following ISI. For standalone multichannel imports, every row also contains the concise **Electrode ID** and complete **Source Label**. Exportable as CSV for use in external statistical software.
@@ -295,7 +304,7 @@ A complete per-spike table: spike number, timestamp, trough amplitude, peak-to-p
 | **Preceding / following ISI** | Time to the previous / next spike | Used to test amplitude-timing relationships (recovery/refractory effects). |
 | **Burst attenuation index** | `(first spike amplitude − last spike amplitude) / first spike amplitude` | Positive = amplitude shrank across the burst; negative = amplitude grew. Zero = no net change. |
 | **Coefficient of variation (CV)** | `standard deviation / mean` | A scale-independent measure of amplitude variability within a burst. |
-| **Hamming distance (method agreement)** | `% of 50 ms bins where Max Interval and logISI disagree` | Quantifies how consistently the two burst-detection methods identify the same time windows as bursting. |
+| **Hamming distance (burst occupancy)** | `% of 50 ms bins where Max Interval and logISI disagree` | Measures how often the methods assign different burst-occupancy states to the same time bins. |
 
 ---
 
@@ -306,7 +315,7 @@ The "Generate Methods Text" button produces a ready-to-paste methods paragraph t
 
 - **Max Interval selected:** reports the threshold multiplier, bandpass range, and refractory period used for spike detection (with the Quiroga et al. 2004 citation), then the Max Interval method's five parameter values (with the Cotterill et al. 2016 citation), and finally the waveform window used for amplitude quantification (with the Obien et al. 2015 citation).
 - **logISI Adaptive selected:** as above, but reports the automatically-derived ISI threshold and void parameter, whether it exceeded 100 ms, and whether single- or dual-threshold detection was applied (noting explicitly if the method fell back to the fixed 100 ms criterion).
-- **Both selected:** reports both methods' parameters/results, plus a sentence describing their agreement level and Hamming distance.
+- **Both selected:** reports both methods' parameters/results, plus the high/moderate/low agreement level on burst occupancy and the Hamming distance.
 - **Standalone multichannel waveform input:** records the concise electrode ID, original source label, editable recording duration, 25 kHz/−1.0 to +2.0 ms waveform timing, selected source amplitude unit, and normalization to µV.
 
 The generated paragraph is shown in a text box for you to copy directly into a manuscript.

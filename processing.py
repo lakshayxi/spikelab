@@ -49,6 +49,43 @@ def detect_spikes(raw_t, raw_filt, threshold_multiplier, fs):
     return spike_times, spike_idxs, threshold, noise_floor
 
 
+def validate_spike_timestamps(spike_times, recording_range=None):
+    """Return spike timestamps as a validated one-dimensional float array."""
+    timestamps = np.asarray(spike_times, dtype=float)
+    if timestamps.ndim != 1:
+        raise ValueError("Spike timestamps must be a one-dimensional sequence.")
+    if not np.all(np.isfinite(timestamps)):
+        raise ValueError("Spike timestamps must be finite.")
+    if len(timestamps) > 1:
+        timestamp_diffs = np.diff(timestamps)
+        if np.any(timestamp_diffs == 0):
+            raise ValueError("Spike timestamps must not contain duplicates.")
+        if np.any(timestamp_diffs < 0):
+            raise ValueError("Spike timestamps must be strictly increasing.")
+
+    if recording_range is not None:
+        try:
+            recording_start, recording_end = recording_range
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Recording range must contain a start and end timestamp.") from exc
+        if not np.isfinite(recording_start) or not np.isfinite(recording_end):
+            raise ValueError("Recording range bounds must be finite.")
+        if recording_start > recording_end:
+            raise ValueError("Recording range start must not exceed its end.")
+        if len(timestamps) and timestamps[0] < recording_start:
+            raise ValueError(
+                f"Spike timestamp {timestamps[0]:g} s is before recording start "
+                f"{recording_start:g} s."
+            )
+        if len(timestamps) and timestamps[-1] > recording_end:
+            raise ValueError(
+                f"Spike timestamp {timestamps[-1]:g} s is after recording end "
+                f"{recording_end:g} s."
+            )
+
+    return timestamps
+
+
 def detect_bursts(spike_times, max_isi_ms, min_spikes):
     """Simple single-threshold Max Interval burst detection (kept for backwards compatibility)."""
     if len(spike_times) < 2:
@@ -278,16 +315,25 @@ def logisi_method(spike_times, min_spikes=3, void_thresh=0.7):
     return bursts, isi_th_ms, void_param, fallback, hist_data
 
 
-def compare_methods(bursts_mi, bursts_logisi, recording_duration, bin_size=0.050):
+def compare_methods(bursts_mi, bursts_logisi, recording_duration, bin_size=0.050, recording_start=0.0):
     """Normalised Hamming distance between MI and logISI burst calls (Cotterill et al. 2016)."""
-    n_bins = max(1, int(np.ceil(recording_duration / bin_size)))
+    if not np.isfinite(recording_duration) or recording_duration <= 0:
+        raise ValueError("Recording duration must be finite and positive.")
+    if not np.isfinite(recording_start):
+        raise ValueError("Recording start must be finite.")
+    if not np.isfinite(bin_size) or bin_size <= 0:
+        raise ValueError("Bin size must be finite and positive.")
+
+    n_bins = int(np.ceil(recording_duration / bin_size))
 
     def to_binary(bursts):
         v = np.zeros(n_bins, dtype=np.int8)
         for b in bursts:
-            s = int(b['start'] / bin_size)
-            e = min(int(b['end'] / bin_size) + 1, n_bins)
-            if s < n_bins:
+            relative_start = (b['start'] - recording_start) / bin_size
+            relative_end = (b['end'] - recording_start) / bin_size
+            s = max(int(np.floor(relative_start)), 0)
+            e = min(int(np.floor(relative_end)) + 1, n_bins)
+            if s < n_bins and e > 0 and s < e:
                 v[s:e] = 1
         return v
 
@@ -296,11 +342,11 @@ def compare_methods(bursts_mi, bursts_logisi, recording_duration, bin_size=0.050
     hamming_pct = float(np.sum(v_mi != v_log)) / n_bins * 100.0
 
     if hamming_pct < 5:
-        label = "Strong agreement ✅"
+        label = "High agreement on burst occupancy ✅"
     elif hamming_pct <= 10:
-        label = "Moderate agreement ⚠️"
+        label = "Moderate agreement on burst occupancy ⚠️"
     else:
-        label = "Poor agreement ❌ — review parameters"
+        label = "Low agreement on burst occupancy ❌"
 
     return hamming_pct, label
 

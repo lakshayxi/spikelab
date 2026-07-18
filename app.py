@@ -30,6 +30,7 @@ from plots import (  # noqa: E402
     plot_logisi_histogram,
     plot_overview,
     plot_raw_trace,
+    plot_spike_waveforms,
     plot_waveform_metrics,
     render_panel_downloads,
 )
@@ -46,6 +47,7 @@ from processing import (  # noqa: E402
     extract_waveforms,
     logisi_method,
     max_interval_method,
+    validate_spike_timestamps,
     waveform_amplitude_stats,
 )
 
@@ -71,7 +73,7 @@ def parse_neuroexplorer_file(content: bytes):
     return parse_neuroexplorer_content(content)
 
 # Keyed on file identity — the leading-underscore `_content` is not hashed, so
-# switching the selected channel never re-runs the whole-file reconciliation.
+# switching the selected channel never re-runs the whole-file positional parse.
 @st.cache_data(show_spinner=False)
 def parse_ne_multichannel_file(file_key: str, _content: bytes):
     return parse_ne_multichannel_content(_content)
@@ -112,7 +114,7 @@ def _segment_validation_errors(t, v, label):
     return errors
 
 def _render_figure(fig, filename, panels=None, base_filename=None, combined=True):
-    st.pyplot(fig, use_container_width=True)
+    st.pyplot(fig, width="stretch")
     label = "Download PNG (combined)" if combined else "Download PNG"
     st.download_button(label, fig_to_bytes(fig), filename, "image/png")
     if panels and base_filename:
@@ -255,6 +257,15 @@ if ne_mc_files:
     if not ne_mc_channels:
         st.error("This export has no channels with any spike data.")
         st.stop()
+    for channel in ne_mc_channels:
+        try:
+            channel['spike_times'] = validate_spike_timestamps(channel['spike_times'])
+        except ValueError as exc:
+            st.error(
+                f"Invalid spike timestamps in NeuroExplorer channel "
+                f"{channel['channel_id']} ({channel['label']}): {exc}"
+            )
+            st.stop()
 
     sel = st.selectbox(
         "NeuroExplorer channel",
@@ -345,7 +356,11 @@ else:
         if len(segments) == 1:
             raw_t, raw_v = segments[0]
         else:
-            raw_t, raw_v, stitch_summary = stitch_segments(segments)
+            try:
+                raw_t, raw_v, stitch_summary = stitch_segments(segments)
+            except ValueError as exc:
+                st.error(f"The uploaded raw segments could not be stitched: {exc}")
+                st.stop()
 
 ne_spike_times, ne_isis, ne_freqs = None, None, None
 
@@ -377,7 +392,7 @@ if has_raw_trace:
                 'Overlap trimmed (s)':        round(row['overlap_s'], 4),
                 'Overlap trimmed (samples)':  row['overlap_samples'],
                 'Samples kept':               row['n_kept'],
-            } for k, row in enumerate(stitch_summary)]), use_container_width=True, hide_index=True)
+            } for k, row in enumerate(stitch_summary)]), width="stretch", hide_index=True)
 
     with st.spinner("Detecting spikes..."):
         spike_times, spike_idxs, threshold, noise_floor = detect_spikes(
@@ -392,6 +407,14 @@ if has_raw_trace:
                 "'Instantaneous Parameters' section, so raw-signal spike detection will be used instead."
             )
             ne_spike_times, ne_isis, ne_freqs = None, None, None
+        else:
+            try:
+                ne_spike_times = validate_spike_timestamps(
+                    ne_spike_times, recording_range=(raw_t[0], raw_t[-1])
+                )
+            except ValueError as exc:
+                st.error(f"The NeuroExplorer spike-time overlay is invalid: {exc}")
+                st.stop()
 
     analysis_spikes = ne_spike_times if ne_spike_times is not None else spike_times
     rec_dur = float(raw_t[-1] - raw_t[0])
@@ -442,7 +465,10 @@ with st.spinner("Detecting bursts..."):
         if not logisi_fb and isi_th is not None and isi_th > 100.0:
             dual_thresh = True
     if burst_method == "Both — compare methods":
-        hamming_pct, agreement = compare_methods(bursts_mi, bursts_logisi, rec_dur)
+        recording_start = float(raw_t[0]) if has_raw_trace else 0.0
+        hamming_pct, agreement = compare_methods(
+            bursts_mi, bursts_logisi, rec_dur, recording_start=recording_start
+        )
 
 # Primary bursts for display in overview/ISI/burst tabs
 if burst_method == "Max Interval (Cotterill et al. 2016)":
@@ -492,21 +518,21 @@ decr_positions, decr_amps, decr_burst_ids = (
 # ── Method comparison banner ──────────────────────────────────────────────────
 if burst_method == "Both — compare methods" and hamming_pct is not None:
     mi_n, log_n = len(bursts_mi), len(bursts_logisi)
-    agree_plain = (
-        "Both methods agree — burst calls are robust."
+    occupancy_agreement = (
+        "High agreement on burst occupancy."
         if hamming_pct < 5 else
-        "Results are broadly consistent across methods."
+        "Moderate agreement on burst occupancy."
         if hamming_pct <= 10 else
-        "Methods disagree substantially — review parameters or ISI structure."
+        "Low agreement on burst occupancy; review parameters or ISI structure."
     )
     hc1, hc2, hc3, hc4 = st.columns(4)
     hc1.metric("MI Bursts",     str(mi_n))
     hc2.metric("logISI Bursts", str(log_n))
     hc3.metric("Hamming Dist.", f"{hamming_pct:.1f}%")
-    hc4.metric("Agreement",     _strip_emoji(agreement).split()[0])
+    hc4.metric("Occupancy agreement", _strip_emoji(agreement).split()[0])
     st.info(
-        f"The two methods agreed on **{100 - hamming_pct:.1f}%** of the recording. "
-        f"{agree_plain}"
+        f"Burst occupancy matched in **{100 - hamming_pct:.1f}%** of 50 ms bins. "
+        f"{occupancy_agreement}"
     )
 
 # ── Top-level summary metrics ─────────────────────────────────────────────────
@@ -533,7 +559,7 @@ if show_logisi:
     ]
 if burst_method == "Both — compare methods":
     base_metrics.append(
-        ("Method agreement", f"{hamming_pct:.1f}%" if hamming_pct is not None else "—")
+        ("Hamming distance", f"{hamming_pct:.1f}%" if hamming_pct is not None else "—")
     )
 
 # Wrap metrics into rows of at most six so cards stay legible when the burst
@@ -568,12 +594,15 @@ else:
 st.markdown("---")
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
-# Tabs that need a raw trace or extracted waveforms are only included when this
-# channel actually has that data (e.g. a multi-channel NeuroExplorer channel with
-# no bundled waveform samples has neither) — omitted rather than shown empty.
+# Continuous inputs get a Raw Trace tab. Standalone NeuroExplorer channels cannot
+# provide a continuous trace, but channels with bundled snippets get a dedicated
+# Spike Waveforms tab instead. Other waveform-dependent tabs are omitted when a
+# selected channel has timestamps only.
 _tab_specs = [("tab1", "Overview")]
 if has_raw_trace:
     _tab_specs.append(("tab_raw", "Raw Trace"))
+elif has_waveforms:
+    _tab_specs.append(("tab_spike_waveforms", "Spike Waveforms"))
 _tab_specs.append(("tab2", "ISI Analysis"))
 if has_waveforms:
     _tab_specs += [("tab3", "Amplitude"), ("tab_wave", "Waveform Metrics")]
@@ -617,6 +646,16 @@ if has_raw_trace:
             fig_raw = plot_raw_trace(raw_t, raw_filt, "Filtered", C_SPIKE)
             fname = "filtered_trace.png"
         _render_figure(fig_raw, fname, combined=False)
+elif has_waveforms:
+    with _tabs["tab_spike_waveforms"]:
+        st.markdown("#### Supplied Spike Waveform Snippets")
+        st.caption(
+            "These are the selected electrode's pre-extracted NeuroExplorer snippets, "
+            "normalized to µV and plotted on the confirmed 25 kHz time axis. They are "
+            "not a continuous raw recording and are not filtered again in this app."
+        )
+        fig_spike_waveforms = plot_spike_waveforms(waveforms, t_axis)
+        _render_figure(fig_spike_waveforms, "spike_waveforms.png", combined=False)
 
 with _tabs["tab2"]:
     if len(analysis_spikes) > 1:
@@ -684,7 +723,7 @@ with _tabs["tab4"]:
             'SD Amp (µV)':       round(b['sd_amp'],   2) if not np.isnan(b['sd_amp'])   else None,
             'CV Amp':            round(b['cv_amp'],   3) if not np.isnan(b['cv_amp'])   else None,
             'Attenuation Index': round(b['attenuation_index'], 3) if not np.isnan(b['attenuation_index']) else None,
-        } for k, b in enumerate(burst_stats)]), use_container_width=True, hide_index=True)
+        } for k, b in enumerate(burst_stats)]), width="stretch", hide_index=True)
 
         st.markdown("#### Burst-Level Correlations")
         fig_bc, panels_bc = plot_burst_correlations(burst_stats)
@@ -731,7 +770,7 @@ with _tabs["tab6"]:
             df['Spike Width (ms)']   = np.round(widths_ms, 3)
             df['Preceding ISI (ms)'] = np.round(isi_pre, 2)
             df['Following ISI (ms)'] = np.round(isi_post, 2)
-        st.dataframe(df, use_container_width=True, hide_index=True,
+        st.dataframe(df, width="stretch", hide_index=True,
                      column_config={
                          'SNR (×σ)':           st.column_config.NumberColumn(format="%.1f"),
                          'Trough (µV)':         st.column_config.NumberColumn(format="%.2f"),
@@ -777,10 +816,10 @@ if st.button("Generate Methods Text"):
         citation     = "(Cotterill et al. 2016, J Neurophysiol; Pasquale et al. 2010, J Comput Neurosci)"
         _ith  = f"{isi_th:.1f}" if isi_th is not None else "100.0"
         _vp   = f"{void_param:.2f}" if void_param is not None else "N/A"
-        agree_word = (
-            "strong"   if (hamming_pct is not None and hamming_pct < 5)  else
+        agreement_level = (
+            "high"     if (hamming_pct is not None and hamming_pct < 5)  else
             "moderate" if (hamming_pct is not None and hamming_pct <= 10) else
-            "poor"
+            "low"
         )
         method_frag  = (
             f"For the Max Interval method: maximum beginning ISI = {max_beg_isi} ms, "
@@ -790,8 +829,8 @@ if st.button("Generate Methods Text"):
         )
         _hd = f"{hamming_pct:.1f}" if hamming_pct is not None else "N/A"
         compare_frag = (
-            f" Both methods were applied and showed {agree_word} agreement "
-            f"(Hamming distance = {_hd}%; Cotterill et al. 2016)."
+            f" Both methods were applied and showed {agreement_level} agreement on burst "
+            f"occupancy (normalized Hamming distance = {_hd}%; Cotterill et al. 2016)."
         )
 
     if has_raw_trace:
