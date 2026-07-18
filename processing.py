@@ -4,7 +4,25 @@ from scipy.signal import butter, filtfilt, find_peaks
 
 
 def bandpass_filter(signal, fs, low=300, high=3000, order=4):
+    if len(signal) < 2:
+        raise ValueError("Trace must contain at least two samples before filtering.")
+    if fs <= 0:
+        raise ValueError("Sampling rate must be positive.")
+    if low <= 0 or high <= 0:
+        raise ValueError("Bandpass cutoffs must be positive.")
+    if low >= high:
+        raise ValueError("Bandpass low cutoff must be lower than high cutoff.")
+    nyquist = fs / 2
+    if high >= nyquist:
+        raise ValueError(
+            f"Bandpass high cutoff ({high:g} Hz) must be below the Nyquist frequency ({nyquist:g} Hz)."
+        )
     b, a = butter(order, [low / (fs / 2), high / (fs / 2)], btype='band')
+    padlen = 3 * max(len(a), len(b))
+    if len(signal) <= padlen:
+        raise ValueError(
+            f"Trace is too short for zero-phase filtering: need more than {padlen} samples."
+        )
     return filtfilt(b, a, signal)
 
 
@@ -14,15 +32,21 @@ def detect_spikes(raw_t, raw_filt, threshold_multiplier, fs):
     threshold   = -threshold_multiplier * noise_floor
     ref_samples = int(0.001 * fs)
 
-    spike_times, spike_idxs = [], []
+    # Vectorised downward crossings: sample below threshold, previous at/above.
+    crossings = np.flatnonzero((raw_filt[1:] < threshold) & (raw_filt[:-1] >= threshold)) + 1
+
+    # Enforce the refractory period by keeping only crossings that fall more than
+    # ref_samples after the last accepted spike (loop is over crossings, not samples).
+    spike_idxs = []
     last = -ref_samples - 1
-    for i in range(1, len(raw_filt)):
-        if raw_filt[i] < threshold and raw_filt[i - 1] >= threshold:
-            if (i - last) > ref_samples:
-                spike_times.append(raw_t[i])
-                spike_idxs.append(i)
-                last = i
-    return np.array(spike_times), np.array(spike_idxs), threshold, noise_floor
+    for i in crossings:
+        if (i - last) > ref_samples:
+            spike_idxs.append(int(i))
+            last = i
+
+    spike_idxs = np.array(spike_idxs, dtype=int)
+    spike_times = raw_t[spike_idxs] if len(spike_idxs) else np.array([])
+    return spike_times, spike_idxs, threshold, noise_floor
 
 
 def detect_bursts(spike_times, max_isi_ms, min_spikes):
@@ -281,39 +305,50 @@ def compare_methods(bursts_mi, bursts_logisi, recording_duration, bin_size=0.050
     return hamming_pct, label
 
 
+def waveform_amplitude_stats(waveforms):
+    """Per-waveform trough, peak, and peak-to-peak amplitude from a (n_spikes, n_samples) matrix."""
+    if len(waveforms) == 0:
+        return np.array([]), np.array([]), np.array([])
+    troughs = waveforms.min(axis=1)
+    peaks = waveforms.max(axis=1)
+    return troughs, peaks, peaks - troughs
+
+
 def extract_waveforms(raw_t, raw_filt, spike_times, fs, pre_ms=1.0, post_ms=2.0):
     pre  = int(pre_ms  / 1000 * fs)
     post = int(post_ms / 1000 * fs)
-    waveforms, troughs, peaks, p2p = [], [], [], []
-    valid_times = []
+    waveforms, valid_times = [], []
     for st in spike_times:
         idx = np.searchsorted(raw_t, st)
         if idx - pre >= 0 and idx + post < len(raw_filt):
-            snip = raw_filt[idx - pre: idx + post]
-            waveforms.append(snip)
-            troughs.append(snip.min())
-            peaks.append(snip.max())
-            p2p.append(snip.max() - snip.min())
+            waveforms.append(raw_filt[idx - pre: idx + post])
             valid_times.append(st)
+    waveforms = np.array(waveforms)
+    troughs, peaks, p2p = waveform_amplitude_stats(waveforms)
     t_axis = np.arange(-pre, post) / fs * 1000
-    return (np.array(waveforms), np.array(troughs), np.array(peaks),
-            np.array(p2p), np.array(valid_times), t_axis)
+    return waveforms, troughs, peaks, p2p, np.array(valid_times), t_axis
 
 
-def build_summary_df(spike_times, bursts, troughs, p2p, valid_times, noise_floor):
+def build_summary_df(spike_times, bursts, troughs, p2p, valid_times, noise_floor, in_burst_mask=None):
     rows = []
-    burst_spike_set = set()
-    for b in bursts:
-        for idx in b['idxs']:
-            burst_spike_set.add(idx)
+    if in_burst_mask is None:
+        burst_spike_set = set()
+        for b in bursts:
+            for idx in b['idxs']:
+                burst_spike_set.add(idx)
+    else:
+        in_burst_mask = np.asarray(in_burst_mask, dtype=bool)
+        if len(in_burst_mask) != len(valid_times):
+            raise ValueError("in_burst_mask must have the same length as valid_times.")
     for i, (st, tr, pp) in enumerate(zip(valid_times, troughs, p2p)):
+        in_burst = bool(in_burst_mask[i]) if in_burst_mask is not None else i in burst_spike_set
         rows.append({
             'Spike #':             i + 1,
             'Time (s)':            round(float(st), 5),
             'Trough (µV)':         round(float(tr), 2),
             'Peak-to-Peak (µV)':   round(float(pp), 2),
             'SNR (×σ)':            round(abs(float(tr)) / noise_floor, 1),
-            'In Burst':            'Yes' if i in burst_spike_set else 'No',
+            'In Burst':            'Yes' if in_burst else 'No',
         })
     return pd.DataFrame(rows)
 

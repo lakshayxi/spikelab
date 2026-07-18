@@ -25,9 +25,9 @@ A complete reference manual for the MEA Spike Analyser: what it does, how to use
 
 ## 1. Overview
 
-The MEA Spike Analyser is an offline tool for analysing extracellular voltage recordings from Multi-Electrode Array (MEA) experiments. Given a raw voltage trace from a single recording channel, it detects spikes, identifies bursts using two independent peer-reviewed algorithms, quantifies spike amplitude and waveform shape, characterizes burst-level amplitude dynamics, and produces publication-ready figures, a spike-level data table, and a draft methods paragraph.
+The MEA Spike Analyser is an offline tool for analysing extracellular voltage recordings from Multi-Electrode Array (MEA) experiments. Given one active signal or pre-sorted electrode at a time, it detects or imports spikes, identifies bursts using two independent peer-reviewed algorithms, quantifies spike amplitude and waveform shape when waveforms are available, characterizes burst-level amplitude dynamics, and produces publication-ready figures, a spike-level data table, and a draft methods paragraph.
 
-**Scope note:** the tool currently analyses **one channel at a time** — it does not yet support multi-electrode spatial analysis (e.g. electrode-array heatmaps or per-channel comparisons). Each analysis run corresponds to a single voltage trace, optionally reconstructed from several sequential export segments (see [Section 4](#4-input-file-formats)).
+**Scope note:** the tool analyses **one selected channel/electrode at a time**. EDF and standalone NeuroExplorer multichannel exports provide selectors, but selecting a channel does not run batch or network analysis. There are no electrode-array heatmaps or cross-channel comparisons. A continuous text trace may still be reconstructed from several sequential export segments (see [Section 4](#4-input-file-formats)).
 
 ---
 
@@ -66,18 +66,18 @@ Dependencies: `streamlit`, `numpy`, `pandas`, `matplotlib`, `scipy`.
 ## 3. Quick Start Workflow
 
 0. **Launch the app.** Double-click the launcher for your OS (see [Section 2](#2-installation--setup)) — no manual environment setup needed.
-1. **Upload your raw data file(s).** A single file, or multiple sequential segment files from the same recording (they will be auto-ordered and stitched — see [Section 4](#4-input-file-formats)).
-2. **(Optional) Upload a NeuroExplorer export.** If provided, its spike timestamps are used in place of the raw-signal spike detector for all downstream analysis.
-3. **Choose a burst detection method** in the sidebar: Max Interval, logISI Adaptive, or Both (to compare).
-4. **Adjust parameters** as needed — every plot and table updates immediately.
-5. **Review the tabs** — spike raster, ISI histograms, amplitude/waveform quantification, burst statistics and dynamics, and the full spike-level data table.
-6. **Export your results** — download any figure (combined or panel-by-panel), download the full spike table as CSV, and generate a ready-to-paste methods paragraph.
+1. **Choose one primary input:** continuous two-column text/CSV, one EDF recording, or one standalone NeuroExplorer multichannel waveform text export.
+2. **Select one signal/electrode** when the EDF or standalone export contains several populated channels.
+3. **For continuous recordings only, optionally upload a NeuroExplorer spike-time overlay.** Its "Instantaneous Parameters" timestamps replace raw-signal detections downstream.
+4. **For a standalone waveform export, confirm waveform unit and duration.** Waveform values default to mV and are normalized to µV. Duration defaults to the latest timestamp across every populated channel and may only be increased.
+5. **Choose a burst detection method** in the sidebar: Max Interval, logISI Adaptive, or Both (to compare).
+6. **Review and export results** — figures, spike-level CSV, and generated methods text all reflect the selected channel.
 
 ---
 
 ## 4. Input File Formats
 
-### Raw voltage trace file
+### Continuous raw voltage text/CSV
 
 A two-column file — **time (seconds)** and **voltage (µV)** — tab- or comma-separated, as exported from Multi Channel Analyzer as **"Raw Data Time Points."** Typical export files include a short header (software name/version, channel label, column units) before the data rows; this header is detected and skipped automatically, no manual editing is required. Example data rows:
 
@@ -99,26 +99,37 @@ Multi Channel Analyzer typically caps a single raw-trace export at around 10–1
 
 A single uploaded file skips all of this and is used directly, with identical behavior to previous versions of the tool.
 
-### NeuroExplorer export (optional)
+### EDF recording
+
+Upload one `.edf` file at a time. Ordinary signals are listed with their source label, independent sampling rate, sample count, and EDF-declared physical dimension. The selected signal's own digital/physical calibration is applied, then recognized voltage dimensions (`V`, `mV`, `uV`/`µV`, and common written variants) are normalized to **µV** before filtering and analysis. Annotation signals are not selectable.
+
+The importer rejects unsupported physical dimensions rather than assuming they are voltage. It also rejects truncated data records and **EDF+D** discontinuous recordings. EDF+D record start times can contain gaps, so joining their sample blocks into a regular time axis would be scientifically incorrect. Continuous EDF and EDF+C recordings are supported.
+
+### Standalone NeuroExplorer multichannel waveform text
+
+This is a quoted-header numeric export containing many electrode/unit groups, each with a `Spike_timestamps` column and, for populated waveform variables, exactly 76 `Spike_value_1` through `Spike_value_76` columns. It is a standalone primary input—not a continuous raw trace and not the optional overlay below—and cannot be combined with raw text segments or EDF.
+
+The format uses **one literal ASCII space per field boundary** and reserves an additional empty spacer position for timestamp-only channel columns. Consecutive spaces are therefore meaningful placeholders, while each 77-column waveform group retains its full positional width even after it runs out of spikes. The parser derives those data widths from the header, so timestamps and waveform values cannot migrate between equal-width channels when one channel ends before another. It rejects partial waveform rows or headers, channels that resume after becoming blank, invalid/non-finite numbers, and non-increasing timestamps with the physical row number in the error.
+
+Only populated channels are listed. The selector shows the concise electrode ID (for example, `A4`), complete original source label, spike count, and waveform availability. One selected electrode feeds the existing single-channel analysis; the app does not calculate network statistics.
+
+Waveform exports do not encode amplitude units. The unit selector therefore defaults to **mV**, also offering µV and V, and all selected-channel waveforms are normalized to µV. These files use the confirmed **25 kHz** waveform sampling rate with 76 samples spanning **−1.0 ms through +2.0 ms** (25 pre-spike samples). The recording duration defaults to the latest timestamp across all populated channels—not merely the selected channel's spike span. It is editable upward, but cannot be shorter than the data. This duration is used for mean firing rate and 50 ms-bin burst-method agreement.
+
+### NeuroExplorer spike-time overlay (optional)
 
 A standard NeuroExplorer ASCII export containing an **"Instantaneous Parameters"** section (spike time, ISI, and instantaneous firing rate columns). If uploaded, its spike timestamps are used for *all* downstream burst/amplitude/waveform analysis instead of the raw-signal spike detector — useful when you've already curated spike times in NeuroExplorer and want this tool's burst/amplitude analyses applied to that curated spike list. Note: the raw-signal spike detector still runs in the background regardless (to establish the noise floor and SNR reference), but its detected spike *times* are only used when no NeuroExplorer file is supplied.
 
-Files missing the "Instantaneous Parameters" section will parse to an empty spike list rather than raising an error — if you upload a NeuroExplorer file and see no spikes, check that this section is present in the export.
+This optional file can accompany continuous text/CSV or EDF only. It cannot accompany the standalone multichannel waveform export, which already contains pre-sorted timestamps. Files missing the "Instantaneous Parameters" section parse to an empty spike list; the app warns and falls back to raw detection.
 
 ---
 
 ## 5. The Analysis Pipeline
 
-Every uploaded recording passes through the same sequence of steps:
+The pipeline branches according to the primary input:
 
-1. **Parse** — raw time/voltage columns are read from the uploaded file(s), and (if applicable) multiple segments are stitched into one continuous trace.
-2. **Determine sampling rate** — inferred automatically from the median spacing between consecutive timestamps. There is no manual override, so irregular or corrupted time columns will produce an incorrect sampling rate.
-3. **Bandpass filter** — a 4th-order Butterworth filter (default 300–3000 Hz) removes slow drift and high-frequency noise, isolating the spike-frequency band.
-4. **Spike detection** — negative threshold crossings on the filtered signal are detected, using a noise-floor-relative threshold and a refractory period to prevent double-counting (see [Section 7](#7-spike-detection--algorithm-details)).
-5. **Burst detection** — the detected (or NeuroExplorer-supplied) spike train is analysed for bursts using the selected method(s) (see [Section 8](#8-burst-detection-methods--algorithm-details)).
-6. **Waveform extraction** — a short window of the filtered signal around each spike is extracted, from which trough, peak, peak-to-peak amplitude, and spike width are computed.
-7. **Derived metrics** — SNR, preceding/following ISI, burst-wise amplitude statistics, intra-burst amplitude decrement, and burst-level correlations are computed from the extracted waveforms and detected bursts.
-8. **Presentation & export** — all of the above are rendered across the tool's tabs as figures and tables, exportable as PNG (combined figure or individual panels) and CSV, alongside an auto-generated methods paragraph.
+1. **Continuous text/CSV or EDF:** parse one regular voltage signal in µV; stitch text segments when needed; infer sampling rate from timestamps; bandpass filter; detect negative-going spikes; optionally substitute overlay timestamps; extract filtered waveforms.
+2. **Standalone multichannel waveform text:** positionally parse every electrode, select one populated channel, normalize its bundled waveform values to µV, and use its pre-sorted timestamps directly. There is no filtering, raw threshold, noise floor, or SNR for this path.
+3. **Shared analysis:** run the selected burst detector(s), derive available amplitude/ISI/burst metrics, render plots and tables, and generate channel-aware exports.
 
 ---
 
@@ -163,6 +174,8 @@ A single selector chooses which method(s) run: **Max Interval (Cotterill et al. 
 |---|---|---|---|---|
 | Pre-spike window (ms) | 0.5 – 3.0 | 1.0 | 0.25 | How much signal before the threshold crossing is included in each extracted spike waveform. |
 | Post-spike window (ms) | 1.0 – 5.0 | 2.0 | 0.25 | How much signal after the threshold crossing is included. |
+
+These sidebar windows apply to continuous voltage traces. Standalone NeuroExplorer waveform exports already contain a fixed 76-sample, −1.0 to +2.0 ms window and do not use these controls.
 
 ---
 
@@ -252,7 +265,7 @@ If the recording contains both burst and non-burst (isolated) spikes, an additio
 Three panels characterizing spike waveform shape:
 - **Spike width** (trough-to-peak duration) histogram — a narrow, unimodal distribution suggests a homogeneous spike population; a wide or multimodal one can indicate noise contamination or a mix of distinct units that a single channel can't separate on its own.
 - **Amplitude vs. spike width** scatter — a lightweight two-feature check for distinct spike populations (genuinely different units often separate visually on these two axes even without full spike sorting).
-- **SNR distribution** histogram — shows how much of the detected spike population sits comfortably above the noise floor versus near the detection threshold, useful for judging whether the threshold is well-chosen.
+- **SNR distribution** histogram — for continuous raw traces, shows how much of the detected spike population sits comfortably above the noise floor versus near the detection threshold. SNR is not available for standalone pre-sorted waveform exports because they contain no raw noise trace or detection threshold.
 
 ### Bursts
 Per-burst duration and spike count (bar chart), plus an in-burst vs. isolated amplitude boxplot. Below the figure, a data table reports per-burst statistics: **mean/max amplitude**, **amplitude standard deviation and coefficient of variation**, and the **attenuation index** (see [Section 10](#10-metrics--formulas-glossary)). A second figure, **Burst-Level Correlations**, plots five relationships across all detected bursts — duration vs. mean amplitude, duration vs. attenuation, spike count vs. attenuation, duration vs. mean spike width, and duration vs. spike count — each with a linear fit and Pearson correlation coefficient when enough bursts are present. These test whether burst-level properties are related (e.g. do longer bursts attenuate more?), a common analysis in burst-dynamics publications.
@@ -267,7 +280,7 @@ Three panels:
 The log-scaled ISI histogram used by the logISI Adaptive method, showing the Gaussian-smoothed curve, the detected intra-burst and inter-burst peaks, and the resulting threshold (or the 100 ms fallback, if applicable). This is shown even when Max Interval is the active detection method, purely for inspection of the recording's ISI structure. When "Both" is selected, an additional **comparison raster** shows the Max Interval and logISI burst calls stacked over the same spike train, letting you visually inspect where the two methods agree or disagree.
 
 ### Data Table
-A complete per-spike table: spike number, timestamp, trough amplitude, peak-to-peak amplitude, SNR, burst membership, spike width, and preceding/following ISI. Exportable as CSV for use in external statistical software.
+A complete per-spike table: spike number, timestamp, trough amplitude, peak-to-peak amplitude, SNR where applicable, burst membership, spike width, and preceding/following ISI. For standalone multichannel imports, every row also contains the concise **Electrode ID** and complete **Source Label**. Exportable as CSV for use in external statistical software.
 
 ---
 
@@ -294,6 +307,7 @@ The "Generate Methods Text" button produces a ready-to-paste methods paragraph t
 - **Max Interval selected:** reports the threshold multiplier, bandpass range, and refractory period used for spike detection (with the Quiroga et al. 2004 citation), then the Max Interval method's five parameter values (with the Cotterill et al. 2016 citation), and finally the waveform window used for amplitude quantification (with the Obien et al. 2015 citation).
 - **logISI Adaptive selected:** as above, but reports the automatically-derived ISI threshold and void parameter, whether it exceeded 100 ms, and whether single- or dual-threshold detection was applied (noting explicitly if the method fell back to the fixed 100 ms criterion).
 - **Both selected:** reports both methods' parameters/results, plus a sentence describing their agreement level and Hamming distance.
+- **Standalone multichannel waveform input:** records the concise electrode ID, original source label, editable recording duration, 25 kHz/−1.0 to +2.0 ms waveform timing, selected source amplitude unit, and normalization to µV.
 
 The generated paragraph is shown in a text box for you to copy directly into a manuscript.
 
@@ -301,16 +315,18 @@ The generated paragraph is shown in a text box for you to copy directly into a m
 Every figure can be downloaded as a single combined PNG. Multi-panel figures additionally offer per-panel PNG downloads (small download buttons beneath the figure), for when you need just one panel for a slide or manuscript figure rather than the full composite.
 
 ### Data export
-The full per-spike Data Table can be downloaded as a CSV file, containing every spike's timestamp, amplitude, SNR, burst membership, spike width, and ISI values for further analysis outside the tool.
+The full per-spike Data Table can be downloaded as a CSV file, containing every spike's timestamp, amplitude, SNR where applicable, burst membership, spike width, and ISI values. Standalone multichannel exports additionally include electrode ID and the unmodified source label.
 
 ---
 
 ## 12. Known Limitations
 
-- **Single-channel only.** The tool analyses one voltage trace at a time; there is currently no support for multi-electrode spatial analysis (e.g. per-electrode comparisons or array heatmaps).
+- **One selected channel at a time.** Multichannel EDF and NeuroExplorer files can be opened, but the tool analyses only the selected signal/electrode. There is no batch, network, spatial, or cross-electrode analysis.
+- **Standalone waveform metadata.** NeuroExplorer waveform text does not encode amplitude units or full acquisition duration. Confirm the unit selector (default mV) and increase the duration if acquisition continued beyond the latest spike.
+- **Discontinuous EDF.** EDF+D is intentionally rejected because its discontinuous record timing cannot be represented by the app's regular continuous-trace pipeline.
 - **Edge-trimming during waveform extraction.** Spikes occurring too close to the very start or end of the recording (closer than the pre-/post-spike window) are excluded from waveform-based metrics (amplitude, width, SNR, burst-amplitude-dynamics plots), since a full waveform window can't be extracted for them. This affects only a small number of spikes at the extreme edges of a recording.
 - **logISI fallback.** If a recording's ISI distribution doesn't show a clear bimodal structure (or there are too few spikes to analyse), the logISI method automatically falls back to a fixed 100 ms threshold rather than failing outright — this is flagged in the logISI Histogram tab and in the generated methods text when it occurs.
-- **Sampling rate is inferred, not manually set.** The sampling rate is calculated from the median spacing between timestamps in the uploaded file. An irregular or corrupted time column will produce an incorrect sampling rate and should be checked before relying on the analysis.
+- **Sampling rate handling.** Continuous text sampling rate is inferred from median timestamp spacing. EDF uses the selected signal's declared samples-per-record and record duration. Standalone waveform text uses the confirmed fixed 25 kHz snippet rate.
 - **Insufficient-data messages.** Some tabs (e.g. Burst Amplitude Dynamics, Amplitude's in-burst comparison) will show an informational message instead of a plot if there are too few bursts or multi-spike bursts in the current recording/parameter combination to compute a meaningful result.
 
 ---

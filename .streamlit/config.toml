@@ -1,3 +1,7 @@
+[server]
+# Allow large EDF recordings (up to ~5 GB); default is 200 MB.
+maxUploadSize = 5120
+
 [theme]
 base = "light"
 primaryColor = "#2563EB"

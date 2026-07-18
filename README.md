@@ -13,7 +13,9 @@ For the complete reference manual — every parameter, algorithm, formula, and p
 - Two peer-reviewed burst detection methods (Max Interval, logISI Adaptive), runnable individually or side by side for comparison
 - Full amplitude, waveform-shape, and burst-dynamics analysis suite (attenuation index, intra-burst decrement, burst-level correlations, and more)
 - Multi-segment file upload with automatic time-based stitching, for recordings exported in sequential chunks
-- Optional NeuroExplorer import
+- Calibrated EDF import with per-signal sampling rates and V/mV/µV normalization
+- Standalone NeuroExplorer multichannel waveform import with an electrode selector (one electrode analysed at a time)
+- Optional NeuroExplorer spike-time overlay for continuous recordings
 - Publication-ready exports: combined and per-panel figure downloads, full spike-level CSV export, and an auto-generated methods-section paragraph
 
 ---
@@ -48,12 +50,13 @@ streamlit run app.py
 
 ## Quick Start
 
-1. Upload your **raw data file** (two columns: time in seconds, voltage in µV)
-2. Optionally upload your **NeuroExplorer export** to use its spike timestamps
-3. Select a burst detection method in the sidebar
-4. Adjust parameters — plots update instantly
-5. Export any figure or the full data table as CSV
-6. Click **Generate Methods Text** to get a ready-to-paste methods paragraph
+1. Upload a continuous **two-column text/CSV trace**, one **EDF recording**, or one standalone **NeuroExplorer multichannel waveform text export**
+2. For a continuous recording, optionally upload a separate NeuroExplorer **Instantaneous Parameters** export to replace detected spike times
+3. For EDF or standalone multichannel input, select the signal/electrode to analyse
+4. Select a burst detection method in the sidebar
+5. Adjust parameters — plots update instantly
+6. Export any figure or the full data table as CSV
+7. Click **Generate Methods Text** to get a ready-to-paste methods paragraph
 
 ---
 
@@ -71,7 +74,7 @@ Running both methods together computes their agreement via normalised Hamming di
 
 ## Parameters, Output Tabs, and File Formats
 
-Every sidebar parameter (with ranges and defaults), every output tab, and both supported input file formats (raw Multi Channel Analyzer export, with multi-segment auto-stitching, and NeuroExplorer export) are documented in full in [DOCUMENTATION.md](DOCUMENTATION.md).
+Every sidebar parameter, output tab, and input workflow is documented in full in [DOCUMENTATION.md](DOCUMENTATION.md), including continuous raw text, calibrated EDF signals, standalone NeuroExplorer multichannel waveform exports, and optional spike-time overlays.
 
 ---
 
