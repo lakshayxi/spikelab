@@ -1,30 +1,105 @@
 import re
-from io import StringIO
 
 import numpy as np
-import pandas as pd
+
+MAX_EDF_UPLOAD_BYTES = 512 * 1024**2
+
+
+def _nonnegative_integer_bytes(size_bytes):
+    if isinstance(size_bytes, (bool, np.bool_)) or not isinstance(size_bytes, (int, np.integer)):
+        raise ValueError("Byte size must be a non-negative integer.")
+    if size_bytes < 0:
+        raise ValueError("Byte size must be a non-negative integer.")
+    return int(size_bytes)
+
+
+def format_bytes(size_bytes):
+    """Format a non-negative byte count using IEC binary units."""
+    size_bytes = _nonnegative_integer_bytes(size_bytes)
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+
+    value = float(size_bytes)
+    for unit in ("KiB", "MiB", "GiB"):
+        value /= 1024
+        if value < 1024:
+            return f"{value:.1f} {unit}"
+    return f"{value / 1024:.1f} TiB"
+
+
+def validate_edf_upload_size(size_bytes, max_size_bytes=MAX_EDF_UPLOAD_BYTES):
+    """Raise ValueError when an EDF upload size is invalid or unsupported."""
+    size_bytes = _nonnegative_integer_bytes(size_bytes)
+    max_size_bytes = _nonnegative_integer_bytes(max_size_bytes)
+    if size_bytes > max_size_bytes:
+        raise ValueError(
+            f"EDF file size {format_bytes(size_bytes)} ({size_bytes:,} bytes) exceeds the "
+            f"supported maximum of {format_bytes(max_size_bytes)} ({max_size_bytes:,} bytes). "
+            "EDF processing currently occurs in memory. "
+            "Export a shorter recording or a smaller channel subset and try again."
+        )
+
+
+def read_edf_upload_bytes(uploaded, max_size_bytes=MAX_EDF_UPLOAD_BYTES):
+    """Validate an UploadedFile-like object before materialising its bytes."""
+    validate_edf_upload_size(uploaded.size, max_size_bytes)
+    return uploaded.getvalue()
 
 
 def parse_raw_content(content: bytes):
-    """Parse raw voltage trace: two-column [time, voltage], auto-detects tab or comma delimiter."""
+    """Parse a tab- or comma-delimited raw voltage trace as time/voltage arrays."""
     text = content.decode('utf-8', errors='ignore')
-    sample = next((ln for ln in text.splitlines() if ln.strip()), '')
-    delimiter = ',' if ',' in sample and '\t' not in sample else '\t'
+    delimiter = None
+    times, voltages = [], []
+    skipped_headers = 0
 
-    try:
-        df = pd.read_csv(
-            StringIO(text), sep=delimiter, header=None, usecols=[0, 1],
-            names=['t', 'v'], engine='c', on_bad_lines='skip',
+    def error(line_number, reason):
+        delimiter_name = {None: "undetermined", '\t': "tab", ',': "comma"}[delimiter]
+        raise ValueError(
+            f"Raw trace line {line_number} is invalid: {reason} "
+            f"(delimiter={delimiter_name}, accepted rows={len(times)}, "
+            f"skipped header rows={skipped_headers})."
         )
-    except (ValueError, pd.errors.EmptyDataError):
-        # Empty file, or no row has two columns under the detected delimiter.
-        return np.array([]), np.array([])
-    # Coerce non-numeric rows (headers, junk) to NaN and drop them — this reproduces
-    # the old per-row try/except while parsing the numeric bulk in C, not Python.
-    t = pd.to_numeric(df['t'], errors='coerce')
-    v = pd.to_numeric(df['v'], errors='coerce')
-    keep = t.notna() & v.notna()
-    return t[keep].to_numpy(dtype=float), v[keep].to_numpy(dtype=float)
+
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        if not line.strip():
+            continue
+
+        if delimiter is None:
+            candidate_delimiter = '\t' if '\t' in line else ',' if ',' in line else None
+            first_field = line.split(candidate_delimiter, 1)[0].strip() if candidate_delimiter else line.strip()
+            try:
+                float(first_field)
+            except ValueError:
+                skipped_headers += 1
+                continue
+            delimiter = candidate_delimiter
+
+        if delimiter is None:
+            error(line_number, "a numeric time value must be followed by a tab- or comma-separated voltage value")
+
+        fields = line.split(delimiter)
+        if len(fields) < 2 or not fields[1].strip():
+            error(line_number, "the voltage value is missing")
+
+        try:
+            time = float(fields[0].strip())
+        except ValueError:
+            error(line_number, "the time value is not numeric")
+        try:
+            voltage = float(fields[1].strip())
+        except ValueError:
+            error(line_number, "the voltage value is not numeric")
+
+        if not np.isfinite(time):
+            error(line_number, "the time value must be finite")
+        if not np.isfinite(voltage):
+            error(line_number, "the voltage value must be finite")
+
+        times.append(time)
+        voltages.append(voltage)
+
+    return np.asarray(times, dtype=float), np.asarray(voltages, dtype=float)
 
 
 def _decode_edf_header(content: bytes):

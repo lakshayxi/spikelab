@@ -1,86 +1,183 @@
-# MEA Spike Analyser
+# SpikeLab
 
-Offline tool for Multi-Electrode Array spike detection, burst analysis, and amplitude quantification.
-Implements peer-reviewed burst detection methods ranked by Cotterill et al. (2016).
+### Offline, single-channel MEA spike and burst analysis
 
-For the complete reference manual — every parameter, algorithm, formula, and plot explained — see [DOCUMENTATION.md](DOCUMENTATION.md).
+[![Validation](https://img.shields.io/badge/validated-pytest%20%7C%20ruff-0A9EDC?logo=pytest&logoColor=white)](docs/VALIDATION.md)
+[![Python 3.9+](https://img.shields.io/badge/Python-3.9%2B-3776AB?logo=python&logoColor=white)](environment.yml)
+[![Streamlit](https://img.shields.io/badge/Streamlit-app-FF4B4B?logo=streamlit&logoColor=white)](https://streamlit.io/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-2ea44f.svg)](LICENSE)
 
----
+SpikeLab (distributed as **MEA Spike Analyser**) is a local Streamlit application for analysing
+offline Multi-Electrode Array recordings one electrode at a time. It brings spike detection, burst
+analysis, waveform quantification, publication-oriented figures, data exports, and draft methods
+text into a single interactive workflow.
 
-## Key Features
+The application runs locally and does not require a database, cloud service, or account.
 
-- Spike detection with an adjustable, noise-floor-relative threshold
-- Two peer-reviewed burst detection methods (Max Interval, logISI Adaptive), runnable individually or side by side for comparison
-- Full amplitude, waveform-shape, and burst-dynamics analysis suite (attenuation index, intra-burst decrement, burst-level correlations, and more)
-- Multi-segment file upload with automatic time-based stitching, for recordings exported in sequential chunks
-- Calibrated EDF import with per-signal sampling rates and V/mV/µV normalization
-- Standalone NeuroExplorer multichannel waveform import with an electrode selector (one electrode analysed at a time)
-- Optional NeuroExplorer spike-time overlay for continuous recordings
-- Publication-ready exports: combined and per-panel figure downloads, full spike-level CSV export, and an auto-generated methods-section paragraph
+## Highlights
 
----
+- Analyse continuous recordings or pre-sorted NeuroExplorer spike data.
+- Detect spikes from filtered voltage traces or use curated spike timestamps.
+- Run Max Interval, adaptive logISI, or a direct comparison of both burst methods.
+- Explore signal, waveform, amplitude, ISI, burst, and correlation views.
+- Export figures, spike- and burst-level tables, and analysis metadata.
+- Generate a draft methods paragraph from the active analysis settings.
+- Keep recordings on the local machine throughout analysis.
 
-## Setup — one click
+For input contracts, algorithms, formulas, parameters, exports, scientific references, and
+interpretation guidance, see the [complete documentation](docs/DOCUMENTATION.md).
 
-**Prerequisite:** [Miniconda](https://docs.conda.io/en/latest/miniconda.html) installed (one-time install, if not already present).
+## Architecture
 
-1. Unzip `MEA_Spike_Analyser.zip`.
-2. Double-click the launcher for your OS:
-   - **Mac:** `Start_MEA_Analyser.command`
-   - **Windows:** `Start_MEA_Analyser.bat`
+The application is intentionally compact. Streamlit orchestration lives in `app.py`, while parsing,
+numerical processing, and plotting remain in focused modules.
 
-The first run creates an isolated environment and installs dependencies automatically (a few minutes, one time only) — every run after that starts instantly. Your browser will open automatically at http://localhost:8501.
+```mermaid
+flowchart LR
+    INPUT["Uploaded recording or<br/>pre-sorted spike data"]
+    PARSERS["parsers.py<br/>parse, validate, calibrate, stitch"]
+    PROCESSING["processing.py<br/>filter, detect, quantify"]
+    BURSTS["Burst analysis<br/>Max Interval · logISI · comparison"]
+    PLOTS["plots.py<br/>figures and PNG exports"]
+    APP["app.py<br/>Streamlit workflow"]
+    RESULTS["Interactive results<br/>tables · metadata · methods text"]
 
-### Manual setup (for developers working on the source)
-
+    INPUT --> PARSERS
+    PARSERS --> PROCESSING
+    PROCESSING --> BURSTS
+    PROCESSING --> PLOTS
+    BURSTS --> PLOTS
+    PROCESSING --> APP
+    BURSTS --> APP
+    PLOTS --> APP
+    APP --> RESULTS
 ```
+
+## Analysis workspaces
+
+SpikeLab groups related results into five top-level workspaces. Views appear only when the selected
+input provides the required signal or waveform data.
+
+| Workspace | Purpose |
+| --- | --- |
+| **Overview** | Inspect spike activity and firing rate across the recording |
+| **Signal** | Review continuous voltage traces and available spike waveforms |
+| **Spike analysis** | Explore amplitude, waveform, and inter-spike interval measurements |
+| **Burst analysis** | Inspect burst summaries, dynamics, correlations, and method comparison |
+| **Data & export** | Review result tables and download analysis artifacts |
+
+## Installation
+
+Python 3.9 or newer is required. Python 3.11 is used in continuous integration.
+
+### Conda (recommended)
+
+```bash
+git clone https://github.com/lakshayxi/spikelab.git
+cd spikelab
 conda env create -f environment.yml
 conda activate mea_tool
 streamlit run app.py
 ```
 
-Or with plain pip instead of conda:
+### pip
 
-```
+```bash
+git clone https://github.com/lakshayxi/spikelab.git
+cd spikelab
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 streamlit run app.py
 ```
 
----
+On Windows, activate the virtual environment with:
 
-## Quick Start
+```bat
+.venv\Scripts\activate
+```
 
-1. Upload a continuous **two-column text/CSV trace**, one **EDF recording**, or one standalone **NeuroExplorer multichannel waveform text export**
-2. For a continuous recording, optionally upload a separate NeuroExplorer **Instantaneous Parameters** export to replace detected spike times
-3. For EDF or standalone multichannel input, select the signal/electrode to analyse
-4. Select a burst detection method in the sidebar
-5. Adjust parameters — plots update instantly
-6. Export any figure or the full data table as CSV
-7. Click **Generate Methods Text** to get a ready-to-paste methods paragraph
+The app opens at [http://localhost:8501](http://localhost:8501).
 
----
+### Lab launchers
 
-## Burst Detection Methods
+After installing Conda, macOS users can run `Start_MEA_Analyser.command` and Windows users can run
+`Start_MEA_Analyser.bat`. The launchers create the `mea_tool` environment when needed, activate it,
+and start Streamlit.
 
-Two peer-reviewed methods are available, runnable individually or together for comparison.
+## Quick start
 
-**Max Interval** — Cotterill et al. (2016), J Neurophysiol. Ranked #1 of 8 burst detection methods across 11 desirable properties. Uses five independently tuneable parameters (beginning/end ISI thresholds, interburst interval, minimum duration, minimum spike count).
+1. Start SpikeLab and upload a supported recording or NeuroExplorer export.
+2. Select the signal or electrode when the source contains multiple channels.
+3. Adjust spike, burst, and waveform settings in the sidebar.
+4. Review the overview before inspecting detailed signal, spike, and burst results.
+5. Open **Data & export** to download the required tables, metadata, and methods text.
 
-**logISI Adaptive** — Pasquale et al. (2010), J Comput Neurosci. Data-driven: derives its ISI threshold automatically from the shape of the recording's own ISI distribution, rather than requiring a fixed value.
+The [user manual](docs/DOCUMENTATION.md) covers each supported input and control in detail.
 
-Running both methods together compares their 50 ms-bin burst occupancy via normalised Hamming distance and labels the occupancy agreement as high, moderate, or low. See [DOCUMENTATION.md](DOCUMENTATION.md#8-burst-detection-methods--algorithm-details) for the full algorithm details, formula, and interpretation thresholds.
+## Documentation
 
----
+- [`docs/DOCUMENTATION.md`](docs/DOCUMENTATION.md) — complete user manual, data formats, analysis pipeline,
+  methods, metrics, workspace reference, exports, limitations, glossary, and references.
+- [`docs/PLOTS_GUIDE.md`](docs/PLOTS_GUIDE.md) — interpretation guide for figures and derived metrics.
+- [`docs/VALIDATION.md`](docs/VALIDATION.md) — deterministic scientific regression fixtures,
+  expected results, validation commands, and the boundary between regression and biological
+  validation.
 
-## Parameters, Output Tabs, and File Formats
+## Project structure
 
-Every sidebar parameter, output tab, and input workflow is documented in full in [DOCUMENTATION.md](DOCUMENTATION.md), including continuous raw text, calibrated EDF signals, standalone NeuroExplorer multichannel waveform exports, and optional spike-time overlays.
+```text
+.
+├── app.py                         # Streamlit UI, orchestration, caching, and exports
+├── parsers.py                     # TXT/CSV, EDF, NeuroExplorer, and stitching logic
+├── processing.py                  # Filtering, detection, burst algorithms, and metrics
+├── plots.py                       # Matplotlib figures and PNG export helpers
+├── docs/
+│   ├── DOCUMENTATION.md           # Complete user and method reference
+│   ├── PLOTS_GUIDE.md             # Plot interpretation guide
+│   └── VALIDATION.md              # Scientific regression-validation record
+├── environment.yml                # Conda runtime environment
+├── requirements.txt               # pip runtime dependencies
+├── Start_MEA_Analyser.command     # macOS launcher
+└── Start_MEA_Analyser.bat         # Windows launcher
+```
 
----
+This is the layout of the distributed package (`MEA_Spike_Analyser.zip` / this repository). The
+full development source — tests, lint config, and the release build script — lives in the private
+`spikelab-dev` repository.
 
-## References
+## Limitations
 
-- Cotterill, E., et al. (2016). A comparison of computational methods for detecting bursts in neuronal spike trains. *Journal of Neurophysiology*, 116(2), 306–321.
-- Pasquale, V., et al. (2010). A self-adapting approach for the detection of bursts and network bursts in neuronal cultures. *Journal of Computational Neuroscience*, 29(1–2), 213–229.
-- Quiroga, R. Q., Nadasdy, Z., & Ben-Shaul, Y. (2004). Unsupervised spike detection and sorting with wavelets and superparamagnetic clustering. *Neural Computation*, 16(8), 1661–1687.
-- Obien, M. E. J., et al. (2015). Revealing neuronal function through microelectrode array recordings. *Frontiers in Neuroscience*, 8, 423.
+- Analysis is limited to one selected signal or electrode per run.
+- Continuous-trace spike detection is negative-going only.
+- Text/CSV traces require regular, strictly increasing timestamps.
+- EDF processing is in memory and limited to continuous recordings up to 512 MiB.
+- Some waveform metrics depend on source-specific timing or user-declared amplitude units.
+- Parameter choice remains preparation dependent.
+- Regression tests do not establish biological or clinical validity.
+
+See [Known Limitations](docs/DOCUMENTATION.md#12-known-limitations) for the complete scientific and
+technical boundary.
+
+## Contributing
+
+Issues and focused pull requests are welcome.
+
+1. Fork the repository and create a branch from `main`.
+2. Install runtime dependencies: `pip install -r requirements.txt`.
+3. Describe the behaviour change clearly, including how you verified it — the automated test suite
+   (pytest, Ruff) runs against the full development source in the private `spikelab-dev` repository.
+4. Keep UI text, generated methods text, and detailed documentation synchronized with scientific or
+   user-facing changes.
+5. Sanity-check the app starts cleanly:
+
+```bash
+python -m compileall .
+streamlit run app.py
+```
+
+When changing runtime dependencies, keep `environment.yml` and `requirements.txt` synchronized.
+
+## License
+
+SpikeLab is available under the [MIT License](LICENSE). Copyright © 2026 Lakshay Saini.

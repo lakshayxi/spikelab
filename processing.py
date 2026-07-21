@@ -1,15 +1,96 @@
+import json
+
 import numpy as np
 import pandas as pd
 from scipy.signal import butter, filtfilt, find_peaks
 
+METHODS_REVIEW_WARNING = (
+    "Draft generated from the current analysis settings. "
+    "Verify all parameters, citations, and experimental details before publication."
+)
+
+
+def _finite_scalar(value, name, *, positive=False, nonnegative=False):
+    if isinstance(value, (bool, np.bool_)) or not np.isscalar(value):
+        raise ValueError(f"{name} must be a finite scalar.")
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a finite scalar.") from exc
+    if not np.isfinite(number):
+        raise ValueError(f"{name} must be finite.")
+    if positive and number <= 0:
+        raise ValueError(f"{name} must be positive.")
+    if nonnegative and number < 0:
+        raise ValueError(f"{name} must be non-negative.")
+    return number
+
+
+def _integer_at_least(value, name, minimum):
+    if isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, np.integer)) or value < minimum:
+        raise ValueError(f"{name} must be an integer greater than or equal to {minimum}.")
+    return int(value)
+
+
+def _finite_1d_array(values, name):
+    try:
+        array = np.asarray(values, dtype=float)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a one-dimensional numeric sequence.") from exc
+    if array.ndim != 1:
+        raise ValueError(f"{name} must be a one-dimensional sequence.")
+    if not np.all(np.isfinite(array)):
+        raise ValueError(f"{name} must contain only finite values.")
+    return array
+
+
+def _validate_trace_arrays(raw_t, signal):
+    timestamps = _finite_1d_array(raw_t, "Trace timestamps")
+    signal = _finite_1d_array(signal, "Signal")
+    if len(timestamps) != len(signal):
+        raise ValueError("Trace timestamps and signal must have the same length.")
+    if len(timestamps) < 2:
+        raise ValueError("Trace timestamps and signal must contain at least two samples.")
+    if not np.all(np.diff(timestamps) > 0):
+        raise ValueError("Trace timestamps must be strictly increasing.")
+    return timestamps, signal
+
+
+def infer_sampling_rate(timestamps):
+    """Validate regular text-trace timestamps and return the rounded sampling rate."""
+    timestamps = np.asarray(timestamps, dtype=float)
+    if timestamps.ndim != 1:
+        raise ValueError("Trace timestamps must be a one-dimensional sequence.")
+    if len(timestamps) < 2:
+        raise ValueError("At least two trace timestamps are required to infer the sampling rate.")
+    if not np.all(np.isfinite(timestamps)):
+        raise ValueError("Trace timestamps must be finite.")
+
+    intervals = np.diff(timestamps)
+    if not np.all(intervals > 0):
+        raise ValueError("Trace timestamps must be strictly increasing.")
+
+    median_period = float(np.median(intervals))
+    tolerance = max(0.05 * median_period, np.finfo(float).eps)
+    irregular = np.abs(intervals - median_period) > tolerance
+    if np.any(irregular):
+        raise ValueError(
+            "Trace timestamps are irregular: "
+            f"median period {median_period:g} s, largest interval {np.max(intervals):g} s, "
+            f"{np.count_nonzero(irregular)} intervals outside the ±5% tolerance."
+        )
+
+    return round(1.0 / median_period)
+
 
 def bandpass_filter(signal, fs, low=300, high=3000, order=4):
+    signal = _finite_1d_array(signal, "Signal")
     if len(signal) < 2:
         raise ValueError("Trace must contain at least two samples before filtering.")
-    if fs <= 0:
-        raise ValueError("Sampling rate must be positive.")
-    if low <= 0 or high <= 0:
-        raise ValueError("Bandpass cutoffs must be positive.")
+    fs = _finite_scalar(fs, "Sampling rate", positive=True)
+    low = _finite_scalar(low, "Bandpass low cutoff", positive=True)
+    high = _finite_scalar(high, "Bandpass high cutoff", positive=True)
+    order = _integer_at_least(order, "Filter order", 1)
     if low >= high:
         raise ValueError("Bandpass low cutoff must be lower than high cutoff.")
     nyquist = fs / 2
@@ -28,6 +109,12 @@ def bandpass_filter(signal, fs, low=300, high=3000, order=4):
 
 def detect_spikes(raw_t, raw_filt, threshold_multiplier, fs):
     """Detect negative threshold crossings with 1ms refractory blanking."""
+    raw_t, raw_filt = _validate_trace_arrays(raw_t, raw_filt)
+    threshold_multiplier = _finite_scalar(
+        threshold_multiplier, "Threshold multiplier", positive=True
+    )
+    fs = _finite_scalar(fs, "Sampling rate", positive=True)
+
     noise_floor = np.median(np.abs(raw_filt)) / 0.6745
     threshold   = -threshold_multiplier * noise_floor
     ref_samples = int(0.001 * fs)
@@ -88,6 +175,9 @@ def validate_spike_timestamps(spike_times, recording_range=None):
 
 def detect_bursts(spike_times, max_isi_ms, min_spikes):
     """Simple single-threshold Max Interval burst detection (kept for backwards compatibility)."""
+    spike_times = validate_spike_timestamps(spike_times)
+    max_isi_ms = _finite_scalar(max_isi_ms, "Maximum ISI", positive=True)
+    min_spikes = _integer_at_least(min_spikes, "Minimum spikes", 2)
     if len(spike_times) < 2:
         return []
     isis = np.diff(spike_times) * 1000
@@ -197,6 +287,12 @@ def max_interval_method(spike_times, max_beg_isi=0.170, max_end_isi=0.300,
                          min_ibi=0.200, min_duration=0.010, min_spikes=3):
     """Full 5-parameter Max Interval burst detection (Cotterill et al. 2016, Table 1).
     All time parameters in seconds."""
+    spike_times = validate_spike_timestamps(spike_times)
+    max_beg_isi = _finite_scalar(max_beg_isi, "Maximum beginning ISI", positive=True)
+    max_end_isi = _finite_scalar(max_end_isi, "Maximum ending ISI", positive=True)
+    min_ibi = _finite_scalar(min_ibi, "Minimum interburst interval", nonnegative=True)
+    min_duration = _finite_scalar(min_duration, "Minimum burst duration", nonnegative=True)
+    min_spikes = _integer_at_least(min_spikes, "Minimum spikes", 2)
     if len(spike_times) < min_spikes:
         return []
     isis = np.diff(spike_times)
@@ -242,6 +338,12 @@ def logisi_method(spike_times, min_spikes=3, void_thresh=0.7):
     hist_data keys: bin_centers (log10 ms), counts, smoothed, peaks, p1, p2,
                     isi_th_ms, void_param.
     """
+    spike_times = validate_spike_timestamps(spike_times)
+    min_spikes = _integer_at_least(min_spikes, "Minimum spikes", 2)
+    void_thresh = _finite_scalar(void_thresh, "Void threshold")
+    if not 0 <= void_thresh <= 1:
+        raise ValueError("Void threshold must be between 0 and 1.")
+
     _empty = {
         'bin_centers': np.array([]), 'counts': np.array([]),
         'smoothed': np.array([]),    'peaks': np.array([]),
@@ -324,21 +426,36 @@ def compare_methods(bursts_mi, bursts_logisi, recording_duration, bin_size=0.050
     if not np.isfinite(bin_size) or bin_size <= 0:
         raise ValueError("Bin size must be finite and positive.")
 
+    def validate_bursts(bursts, method_name):
+        windows = []
+        for index, burst in enumerate(bursts):
+            start = _finite_scalar(burst['start'], f"{method_name} burst {index + 1} start")
+            end = _finite_scalar(burst['end'], f"{method_name} burst {index + 1} end")
+            if end < start:
+                raise ValueError(
+                    f"{method_name} burst {index + 1} end must not be earlier than its start."
+                )
+            windows.append((start, end))
+        return windows
+
+    windows_mi = validate_bursts(bursts_mi, "Max Interval")
+    windows_logisi = validate_bursts(bursts_logisi, "logISI")
+
     n_bins = int(np.ceil(recording_duration / bin_size))
 
-    def to_binary(bursts):
+    def to_binary(windows):
         v = np.zeros(n_bins, dtype=np.int8)
-        for b in bursts:
-            relative_start = (b['start'] - recording_start) / bin_size
-            relative_end = (b['end'] - recording_start) / bin_size
+        for start, end in windows:
+            relative_start = (start - recording_start) / bin_size
+            relative_end = (end - recording_start) / bin_size
             s = max(int(np.floor(relative_start)), 0)
             e = min(int(np.floor(relative_end)) + 1, n_bins)
             if s < n_bins and e > 0 and s < e:
                 v[s:e] = 1
         return v
 
-    v_mi  = to_binary(bursts_mi)
-    v_log = to_binary(bursts_logisi)
+    v_mi  = to_binary(windows_mi)
+    v_log = to_binary(windows_logisi)
     hamming_pct = float(np.sum(v_mi != v_log)) / n_bins * 100.0
 
     if hamming_pct < 5:
@@ -361,8 +478,17 @@ def waveform_amplitude_stats(waveforms):
 
 
 def extract_waveforms(raw_t, raw_filt, spike_times, fs, pre_ms=1.0, post_ms=2.0):
+    raw_t, raw_filt = _validate_trace_arrays(raw_t, raw_filt)
+    spike_times = validate_spike_timestamps(spike_times)
+    fs = _finite_scalar(fs, "Sampling rate", positive=True)
+    pre_ms = _finite_scalar(pre_ms, "Pre-spike window", positive=True)
+    post_ms = _finite_scalar(post_ms, "Post-spike window", positive=True)
     pre  = int(pre_ms  / 1000 * fs)
     post = int(post_ms / 1000 * fs)
+    if pre < 1:
+        raise ValueError("Pre-spike window must contain at least one sample.")
+    if post < 1:
+        raise ValueError("Post-spike window must contain at least one sample.")
     waveforms, valid_times = [], []
     for st in spike_times:
         idx = np.searchsorted(raw_t, st)
@@ -397,6 +523,123 @@ def build_summary_df(spike_times, bursts, troughs, p2p, valid_times, noise_floor
             'In Burst':            'Yes' if in_burst else 'No',
         })
     return pd.DataFrame(rows)
+
+
+BURST_EXPORT_COLUMNS = [
+    'Burst Number',
+    'Start Time (s)',
+    'End Time (s)',
+    'Duration (ms)',
+    'Spike Count',
+    'Mean Amplitude (µV)',
+    'Maximum Amplitude (µV)',
+    'Amplitude SD (µV)',
+    'Amplitude CV',
+    'Attenuation Index',
+    'Mean Spike Width (ms)',
+    'Burst Detection Method',
+]
+
+
+def build_burst_summary_df(burst_stats, method_name):
+    """Convert existing per-burst statistics to a stable export table."""
+    rows = []
+    for index, burst in enumerate(burst_stats):
+        rows.append({
+            'Burst Number': index + 1,
+            'Start Time (s)': burst['start'],
+            'End Time (s)': burst['end'],
+            'Duration (ms)': burst['duration'],
+            'Spike Count': burst['n_spikes'],
+            'Mean Amplitude (µV)': burst.get('mean_amp', np.nan),
+            'Maximum Amplitude (µV)': burst.get('max_amp', np.nan),
+            'Amplitude SD (µV)': burst.get('sd_amp', np.nan),
+            'Amplitude CV': burst.get('cv_amp', np.nan),
+            'Attenuation Index': burst.get('attenuation_index', np.nan),
+            'Mean Spike Width (ms)': burst.get('mean_width', np.nan),
+            'Burst Detection Method': method_name,
+        })
+    return pd.DataFrame(rows, columns=BURST_EXPORT_COLUMNS)
+
+
+def _json_safe(value):
+    if isinstance(value, np.generic):
+        return _json_safe(value.item())
+    if isinstance(value, np.ndarray):
+        return [_json_safe(item) for item in value.tolist()]
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, float) and not np.isfinite(value):
+        return None
+    return value
+
+
+def build_analysis_metadata(
+    *,
+    analysis_timestamp_utc,
+    source_filenames,
+    source_input_type,
+    selected_channel,
+    parser_information,
+    stitch_information,
+    recording_start,
+    recording_end,
+    recording_duration,
+    sampling_rate,
+    spike_source,
+    spike_count,
+    valid_waveform_count,
+    burst_count,
+    selected_burst_method,
+    analysis_parameters,
+    logisi_results=None,
+    method_comparison=None,
+    waveform_unit=None,
+):
+    """Build JSON-safe metadata for one completed analysis."""
+    bursts = {
+        'count': burst_count,
+        'selected_method': selected_burst_method,
+    }
+    if logisi_results is not None:
+        bursts['logisi'] = logisi_results
+    if method_comparison is not None:
+        bursts['method_comparison'] = method_comparison
+
+    metadata = {
+        'application_name': 'MEA Spike Analyser',
+        'schema_version': 1,
+        'analysis_timestamp_utc': analysis_timestamp_utc,
+        'source': {
+            'filenames': list(source_filenames),
+            'input_type': source_input_type,
+            'selected_channel': selected_channel,
+            'parser_information': parser_information,
+            'stitch_information': stitch_information,
+        },
+        'recording': {
+            'start_s': recording_start,
+            'end_s': recording_end,
+            'duration_s': recording_duration,
+            'sampling_rate_hz': sampling_rate,
+        },
+        'spikes': {
+            'source': spike_source,
+            'count': spike_count,
+            'valid_waveform_count': valid_waveform_count,
+        },
+        'bursts': bursts,
+        'parameters': analysis_parameters,
+        'selected_waveform_unit': waveform_unit,
+    }
+    return _json_safe(metadata)
+
+
+def analysis_metadata_to_json(metadata):
+    """Serialize analysis metadata as indented standards-compliant JSON."""
+    return json.dumps(_json_safe(metadata), indent=2, ensure_ascii=False, allow_nan=False)
 
 
 def compute_spike_widths(waveforms, t_axis):

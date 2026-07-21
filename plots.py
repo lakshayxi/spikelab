@@ -17,6 +17,10 @@ C_BURST = '#DC2626'
 C_LOGISI = '#7C3AED'
 C_ANNOT = '#92400E'   # dark amber for annotations
 
+MAX_WAVEFORM_OVERLAYS = 500
+MAX_SCATTER_POINTS = 5_000
+
+
 def style_ax(ax, title=''):
     ax.set_facecolor(C_PANEL)
     ax.tick_params(colors=C_TEXT, labelsize=9)
@@ -31,6 +35,29 @@ def style_ax(ax, title=''):
 def _strip_emoji(s):
     """Remove trailing status emojis from compare_methods() return strings."""
     return s.replace('✅', '').replace('⚠️', '').replace('❌', '').strip()
+
+
+def select_display_indices(length, max_items):
+    """Return deterministic, approximately even indices for display-only sampling."""
+    if length < 0:
+        raise ValueError("length must be non-negative")
+    if max_items <= 0:
+        raise ValueError("max_items must be positive")
+    if length <= max_items:
+        return np.arange(length, dtype=int)
+    if max_items == 1:
+        return np.array([0, length - 1], dtype=int)
+    return np.unique(np.linspace(0, length - 1, max_items, dtype=int))
+
+
+def _display_note(displayed, total, representative_label, analysed_label, context=None):
+    if displayed >= total:
+        return None
+    note = f"Showing {displayed:,} representative {representative_label} from {total:,} analysed {analysed_label}"
+    if context:
+        note += f" in {context}"
+    return note + "."
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Figures
@@ -55,14 +82,20 @@ def panel_to_bytes(fig, axes):
     return buf
 
 def render_panel_downloads(fig, panels, base_filename):
-    """Compact row of small download buttons, one per panel of a multi-panel figure."""
+    """Render descriptive per-panel download buttons inside a figure popover."""
     if not panels:
         return
-    cols = st.columns(len(panels))
-    for col, (short_name, label, axes) in zip(cols, panels):
-        col.download_button(
-            "⬇️", panel_to_bytes(fig, axes), f"{base_filename}_{short_name}.png",
-            "image/png", help=f"Download: {label}", key=f"dl_{base_filename}_{short_name}",
+    for short_name, label, axes in panels:
+        display_label = label
+        if " — " in display_label and len(display_label.split(" — ", 1)[0]) == 1:
+            display_label = display_label.split(" — ", 1)[1]
+        st.download_button(
+            f"Download {display_label.lower()} PNG",
+            panel_to_bytes(fig, axes),
+            f"{base_filename}_{short_name}.png",
+            "image/png",
+            key=f"dl_{base_filename}_{short_name}",
+            width="stretch",
         )
 
 def plot_overview(spike_times, bursts, freqs, x_range=None):
@@ -116,7 +149,6 @@ def plot_overview(spike_times, bursts, freqs, x_range=None):
 def plot_isi(spike_times, isi_threshold_ms, secondary_threshold_ms=None):
     isis = np.diff(spike_times) * 1000
     fig, axes = plt.subplots(1, 2, figsize=(12, 4), facecolor=C_BG)
-    fig.suptitle('Inter-Spike Interval Analysis', color=C_TEXT, fontsize=13, fontweight='bold')
 
     bins    = np.linspace(0, min(isis.max(), 1000), 60)
     centers = (bins[:-1] + bins[1:]) / 2
@@ -124,7 +156,7 @@ def plot_isi(spike_times, isi_threshold_ms, secondary_threshold_ms=None):
     colors  = [C_SPIKE if c <= isi_threshold_ms else C_MUTED for c in centers]
 
     for ax, ylabel, yscale in [(axes[0], 'Count', 'linear'), (axes[1], 'Count (log)', 'log')]:
-        title = 'ISI Histogram' if yscale == 'linear' else 'ISI Histogram (log scale)'
+        title = 'Linear scale' if yscale == 'linear' else 'Log count scale'
         style_ax(ax, title)
         y = counts if yscale == 'linear' else counts + 0.5
         ax.bar(centers, y, width=bins[1] - bins[0], color=colors, edgecolor='none', alpha=0.80)
@@ -141,12 +173,24 @@ def plot_isi(spike_times, isi_threshold_ms, secondary_threshold_ms=None):
 
     fig.tight_layout()
     panels = [
-        ('linear', 'ISI Histogram',            [axes[0]]),
-        ('log',    'ISI Histogram (log scale)', [axes[1]]),
+        ('linear', 'Linear-scale ISI histogram', [axes[0]]),
+        ('log',    'Log-count ISI histogram',    [axes[1]]),
     ]
     return fig, panels
 
-def plot_amplitude(waveforms, troughs, peaks, p2p, valid_times, t_axis, noise_floor, threshold):
+def plot_amplitude(
+    waveforms,
+    troughs,
+    peaks,
+    p2p,
+    valid_times,
+    t_axis,
+    noise_floor,
+    threshold,
+    max_waveforms=MAX_WAVEFORM_OVERLAYS,
+    max_scatter_points=MAX_SCATTER_POINTS,
+):
+    display_notes = []
     fig = plt.figure(figsize=(14, 10), facecolor=C_BG)
     gs  = gridspec.GridSpec(2, 2, figure=fig, hspace=0.45, wspace=0.32,
                             left=0.07, right=0.97, top=0.92, bottom=0.07)
@@ -154,11 +198,20 @@ def plot_amplitude(waveforms, troughs, peaks, p2p, valid_times, t_axis, noise_fl
     cmap     = plt.cm.viridis
     norm_amp = ((np.abs(troughs) - np.abs(troughs).min()) /
                 (np.abs(troughs).max() - np.abs(troughs).min() + 1e-9))
+    waveform_indices = select_display_indices(len(waveforms), max_waveforms)
+    waveform_note = _display_note(
+        len(waveform_indices),
+        len(waveforms),
+        "waveforms",
+        "waveforms",
+    )
+    if waveform_note:
+        display_notes.append(waveform_note)
 
     ax_A = fig.add_subplot(gs[0, 0])
     style_ax(ax_A, 'A  All Spike Waveforms')
-    for w, na in zip(waveforms, norm_amp):
-        ax_A.plot(t_axis, w, color=cmap(na), alpha=0.20, linewidth=0.5)
+    for idx in waveform_indices:
+        ax_A.plot(t_axis, waveforms[idx], color=cmap(norm_amp[idx]), alpha=0.20, linewidth=0.5)
     mean_w = waveforms.mean(axis=0)
     ax_A.plot(t_axis, mean_w, color=C_TEXT, linewidth=2.0, label='Mean waveform', zorder=5)
     if np.isfinite(threshold):
@@ -212,7 +265,27 @@ def plot_amplitude(waveforms, troughs, peaks, p2p, valid_times, t_axis, noise_fl
 
     ax_D = fig.add_subplot(gs[1, 1])
     style_ax(ax_D, 'D  Spike Amplitude Over Time')
-    sc = ax_D.scatter(valid_times, p2p, c=p2p, cmap=cmap, s=35, alpha=0.80, zorder=3)
+    scatter_indices = select_display_indices(len(valid_times), max_scatter_points)
+    scatter_note = _display_note(
+        len(scatter_indices),
+        len(valid_times),
+        "points",
+        "spikes",
+        "Spike Amplitude Over Time",
+    )
+    if scatter_note:
+        display_notes.append(scatter_note)
+    p2p_norm = plt.Normalize(p2p.min(), p2p.max())
+    sc = ax_D.scatter(
+        valid_times[scatter_indices],
+        p2p[scatter_indices],
+        c=p2p[scatter_indices],
+        cmap=cmap,
+        norm=p2p_norm,
+        s=35,
+        alpha=0.80,
+        zorder=3,
+    )
     ax_D.axhline(p2p.mean(), color=C_TEXT, lw=1.0, ls='--', alpha=0.7,
                  label=f'Mean P2P: {p2p.mean():.1f} µV')
     if len(valid_times) >= 2:
@@ -231,7 +304,7 @@ def plot_amplitude(waveforms, troughs, peaks, p2p, valid_times, t_axis, noise_fl
         ('C_p2p_dist',     'C — Peak-to-Peak Amplitude Distribution', [ax_C]),
         ('D_amp_time',     'D — Spike Amplitude Over Time',           [ax_D, cb2.ax]),
     ]
-    return fig, panels
+    return fig, panels, display_notes
 
 def plot_bursts(bursts, p2p, in_burst_mask):
     if not bursts:
@@ -306,7 +379,8 @@ def plot_amplitude_burst_membership(p2p, in_burst_mask):
     fig.tight_layout()
     return fig
 
-def plot_waveform_metrics(widths_ms, p2p, snr_arr):
+def plot_waveform_metrics(widths_ms, p2p, snr_arr, max_scatter_points=MAX_SCATTER_POINTS):
+    display_notes = []
     valid_w = ~np.isnan(widths_ms)
     fig, axes = plt.subplots(1, 3, figsize=(15, 4.2), facecolor=C_BG)
 
@@ -324,7 +398,19 @@ def plot_waveform_metrics(widths_ms, p2p, snr_arr):
     ax2 = axes[1]
     style_ax(ax2, 'Amplitude vs Spike Width')
     if valid_w.any():
-        ax2.scatter(widths_ms[valid_w], p2p[valid_w], c=C_SPIKE, s=25, alpha=0.6)
+        valid_indices = np.flatnonzero(valid_w)
+        selected = select_display_indices(len(valid_indices), max_scatter_points)
+        scatter_indices = valid_indices[selected]
+        ax2.scatter(widths_ms[scatter_indices], p2p[scatter_indices], c=C_SPIKE, s=25, alpha=0.6)
+        scatter_note = _display_note(
+            len(scatter_indices),
+            len(valid_indices),
+            "points",
+            "spikes",
+            "Amplitude vs Spike Width",
+        )
+        if scatter_note:
+            display_notes.append(scatter_note)
     ax2.set_xlabel('Width (ms)', fontsize=9)
     ax2.set_ylabel('Peak-to-peak (µV)', fontsize=9)
 
@@ -345,20 +431,40 @@ def plot_waveform_metrics(widths_ms, p2p, snr_arr):
         ('amp_vs_width',  'Amplitude vs Spike Width',     [ax2]),
         ('snr_hist',      'SNR Distribution',             [ax3]),
     ]
-    return fig, panels
+    return fig, panels, display_notes
 
-def plot_burst_amplitude_dynamics(positions, amps, valid_times, p2p, isi_pre, isi_post):
+
+def plot_burst_amplitude_dynamics(
+    positions,
+    amps,
+    valid_times,
+    p2p,
+    isi_pre,
+    isi_post,
+    max_scatter_points=MAX_SCATTER_POINTS,
+):
+    display_notes = []
     fig, axes = plt.subplots(1, 3, figsize=(15, 4.2), facecolor=C_BG)
 
     ax1 = axes[0]
     style_ax(ax1, 'Intra-Burst Amplitude Decrement')
     if len(positions):
-        ax1.scatter(positions, amps, c=C_MUTED, s=18, alpha=0.35, label='Spikes')
+        selected = select_display_indices(len(positions), max_scatter_points)
+        ax1.scatter(positions[selected], amps[selected], c=C_MUTED, s=18, alpha=0.35, label='Spikes')
         max_pos = int(positions.max())
         means = [amps[positions == k].mean() for k in range(max_pos + 1)]
         ax1.plot(range(max_pos + 1), means, color=C_BURST, lw=2.0, marker='o',
                  markersize=4, label='Mean per position')
         ax1.legend(fontsize=8, facecolor=C_PANEL, edgecolor=C_GRID)
+        scatter_note = _display_note(
+            len(selected),
+            len(positions),
+            "points",
+            "in-burst spikes",
+            "Intra-Burst Amplitude Decrement",
+        )
+        if scatter_note:
+            display_notes.append(scatter_note)
     ax1.set_xlabel('Spike position in burst', fontsize=9)
     ax1.set_ylabel('Peak-to-peak (µV)', fontsize=9)
 
@@ -366,7 +472,19 @@ def plot_burst_amplitude_dynamics(positions, amps, valid_times, p2p, isi_pre, is
     style_ax(ax2, 'Amplitude vs Preceding ISI')
     valid_pre = ~np.isnan(isi_pre)
     if valid_pre.any():
-        ax2.scatter(isi_pre[valid_pre], p2p[valid_pre], c=C_SPIKE, s=25, alpha=0.6)
+        valid_indices = np.flatnonzero(valid_pre)
+        selected = select_display_indices(len(valid_indices), max_scatter_points)
+        scatter_indices = valid_indices[selected]
+        ax2.scatter(isi_pre[scatter_indices], p2p[scatter_indices], c=C_SPIKE, s=25, alpha=0.6)
+        scatter_note = _display_note(
+            len(scatter_indices),
+            len(valid_indices),
+            "points",
+            "spikes",
+            "Amplitude vs Preceding ISI",
+        )
+        if scatter_note:
+            display_notes.append(scatter_note)
     ax2.set_xlabel('Preceding ISI (ms)', fontsize=9)
     ax2.set_ylabel('Peak-to-peak (µV)', fontsize=9)
 
@@ -374,7 +492,19 @@ def plot_burst_amplitude_dynamics(positions, amps, valid_times, p2p, isi_pre, is
     style_ax(ax3, 'Amplitude vs Following ISI')
     valid_post = ~np.isnan(isi_post)
     if valid_post.any():
-        ax3.scatter(isi_post[valid_post], p2p[valid_post], c=C_LOGISI, s=25, alpha=0.6)
+        valid_indices = np.flatnonzero(valid_post)
+        selected = select_display_indices(len(valid_indices), max_scatter_points)
+        scatter_indices = valid_indices[selected]
+        ax3.scatter(isi_post[scatter_indices], p2p[scatter_indices], c=C_LOGISI, s=25, alpha=0.6)
+        scatter_note = _display_note(
+            len(scatter_indices),
+            len(valid_indices),
+            "points",
+            "spikes",
+            "Amplitude vs Following ISI",
+        )
+        if scatter_note:
+            display_notes.append(scatter_note)
     ax3.set_xlabel('Following ISI (ms)', fontsize=9)
     ax3.set_ylabel('Peak-to-peak (µV)', fontsize=9)
 
@@ -384,13 +514,18 @@ def plot_burst_amplitude_dynamics(positions, amps, valid_times, p2p, isi_pre, is
         ('amp_vs_pre_isi',       'Amplitude vs Preceding ISI',      [ax2]),
         ('amp_vs_post_isi',      'Amplitude vs Following ISI',      [ax3]),
     ]
-    return fig, panels
+    return fig, panels, display_notes
 
-def _scatter_with_fit(ax, x, y, title, xlabel, ylabel, color):
+
+def _scatter_with_fit(ax, x, y, title, xlabel, ylabel, color, display_notes, max_scatter_points):
     style_ax(ax, title)
     mask = ~(np.isnan(x) | np.isnan(y))
     x, y = x[mask], y[mask]
-    ax.scatter(x, y, c=color, s=25, alpha=0.6)
+    selected = select_display_indices(len(x), max_scatter_points)
+    ax.scatter(x[selected], y[selected], c=color, s=25, alpha=0.6)
+    scatter_note = _display_note(len(selected), len(x), "points", "bursts", title)
+    if scatter_note:
+        display_notes.append(scatter_note)
     if len(x) >= 3:
         r = np.corrcoef(x, y)[0, 1]
         slope, intercept = np.polyfit(x, y, 1)
@@ -401,9 +536,10 @@ def _scatter_with_fit(ax, x, y, title, xlabel, ylabel, color):
     ax.set_xlabel(xlabel, fontsize=9)
     ax.set_ylabel(ylabel, fontsize=9)
 
-def plot_burst_correlations(burst_stats):
+def plot_burst_correlations(burst_stats, max_scatter_points=MAX_SCATTER_POINTS):
     if not burst_stats:
-        return None, []
+        return None, [], []
+    display_notes = []
     durs  = np.array([b['duration'] for b in burst_stats], dtype=float)
     ns    = np.array([b['n_spikes'] for b in burst_stats], dtype=float)
     mamp  = np.array([b['mean_amp'] for b in burst_stats], dtype=float)
@@ -416,19 +552,24 @@ def plot_burst_correlations(burst_stats):
 
     ax1 = fig.add_subplot(gs[0, 0])
     _scatter_with_fit(ax1, durs, mamp,
-                       'Duration vs Mean Amplitude', 'Duration (ms)', 'Mean P2P (µV)', C_SPIKE)
+                      'Duration vs Mean Amplitude', 'Duration (ms)', 'Mean P2P (µV)', C_SPIKE,
+                      display_notes, max_scatter_points)
     ax2 = fig.add_subplot(gs[0, 1])
     _scatter_with_fit(ax2, durs, atten,
-                       'Duration vs Attenuation Index', 'Duration (ms)', 'Attenuation Index', C_BURST)
+                      'Duration vs Attenuation Index', 'Duration (ms)', 'Attenuation Index', C_BURST,
+                      display_notes, max_scatter_points)
     ax3 = fig.add_subplot(gs[0, 2])
     _scatter_with_fit(ax3, ns, atten,
-                       'Spike Count vs Attenuation Index', 'Spike count', 'Attenuation Index', C_LOGISI)
+                      'Spike Count vs Attenuation Index', 'Spike count', 'Attenuation Index', C_LOGISI,
+                      display_notes, max_scatter_points)
     ax4 = fig.add_subplot(gs[1, 0])
     _scatter_with_fit(ax4, durs, mwid,
-                       'Duration vs Mean Width', 'Duration (ms)', 'Mean Width (ms)', C_SPIKE)
+                      'Duration vs Mean Width', 'Duration (ms)', 'Mean Width (ms)', C_SPIKE,
+                      display_notes, max_scatter_points)
     ax5 = fig.add_subplot(gs[1, 1])
     _scatter_with_fit(ax5, durs, ns,
-                       'Duration vs Spike Count', 'Duration (ms)', 'Spike count', C_MUTED)
+                      'Duration vs Spike Count', 'Duration (ms)', 'Spike count', C_MUTED,
+                      display_notes, max_scatter_points)
 
     panels = [
         ('duration_vs_mean_amp',      'Duration vs Mean Amplitude',        [ax1]),
@@ -437,7 +578,7 @@ def plot_burst_correlations(burst_stats):
         ('duration_vs_width',         'Duration vs Mean Width',            [ax4]),
         ('duration_vs_spikecount',    'Duration vs Spike Count',           [ax5]),
     ]
-    return fig, panels
+    return fig, panels, display_notes
 
 def plot_logisi_histogram(hist_data, isi_th_ms, void_param, fallback):
     if hist_data is None or len(hist_data['bin_centers']) == 0:
@@ -525,22 +666,25 @@ def plot_comparison_raster(spike_times, bursts_mi, bursts_logisi, hamming_pct, a
 def plot_raw_trace(t, v, label, color, max_points=50_000):
     """Plot a continuous voltage trace over time, decimating if very large."""
     n = len(t)
+    display_notes = []
     if n > max_points:
         step = int(np.ceil(n / max_points))
         t_plot, v_plot = t[::step], v[::step]
-        decim_note = f" (downsampled {step}×, {len(t_plot):,} of {n:,} pts)"
+        display_notes.append(
+            f"Displayed using {step}× visual downsampling: {len(t_plot):,} of "
+            f"{n:,} samples. Analysis uses the full signal."
+        )
     else:
         t_plot, v_plot = t, v
-        decim_note = ""
 
     fig, ax = plt.subplots(figsize=(14, 4), facecolor=C_BG)
-    style_ax(ax, f'{label} Voltage Trace{decim_note}')
+    style_ax(ax, f'{label} voltage trace')
     ax.plot(t_plot, v_plot, color=color, linewidth=0.5)
     ax.set_xlabel('Time (s)', fontsize=9)
     ax.set_ylabel('Voltage (µV)', fontsize=9)
     ax.set_xlim(t_plot[0], t_plot[-1])
     fig.tight_layout()
-    return fig
+    return fig, display_notes
 
 
 def plot_spike_waveforms(waveforms, t_axis, max_waveforms=500):
@@ -552,18 +696,21 @@ def plot_spike_waveforms(waveforms, t_axis, max_waveforms=500):
     """
     n_waveforms = len(waveforms)
     if n_waveforms > max_waveforms:
-        shown_indices = np.linspace(0, n_waveforms - 1, max_waveforms, dtype=int)
+        shown_indices = select_display_indices(n_waveforms, max_waveforms)
         shown = waveforms[shown_indices]
-        subset_note = f"showing {len(shown):,} of {n_waveforms:,}"
+        display_notes = [
+            f"Displayed using {len(shown):,} representative waveforms from "
+            f"{n_waveforms:,} supplied waveforms. Mean and variability use all waveforms."
+        ]
     else:
         shown = waveforms
-        subset_note = f"{n_waveforms:,} supplied"
+        display_notes = []
 
     mean_waveform = waveforms.mean(axis=0)
     std_waveform = waveforms.std(axis=0)
 
     fig, ax = plt.subplots(figsize=(14, 5), facecolor=C_BG)
-    style_ax(ax, f'Supplied Spike Waveforms ({subset_note})')
+    style_ax(ax, 'Representative spike waveforms')
     ax.plot(t_axis, shown.T, color=C_SPIKE, alpha=0.08, linewidth=0.45)
     ax.fill_between(
         t_axis,
@@ -581,4 +728,4 @@ def plot_spike_waveforms(waveforms, t_axis, max_waveforms=500):
     ax.set_xlim(t_axis[0], t_axis[-1])
     ax.legend(fontsize=8, facecolor=C_PANEL, edgecolor=C_GRID)
     fig.tight_layout()
-    return fig
+    return fig, display_notes

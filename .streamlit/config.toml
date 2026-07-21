@@ -1,6 +1,6 @@
 [server]
-# Allow large EDF recordings (up to ~5 GB); default is 200 MB.
-maxUploadSize = 5120
+# Global Streamlit upload ceiling; EDF validation uses the same 512 MiB boundary.
+maxUploadSize = 512
 
 [theme]
 base = "light"
