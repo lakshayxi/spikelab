@@ -960,28 +960,19 @@ tab_overview, tab_signal, tab_spikes, tab_bursts, tab_data = st.tabs([
 
 with tab_overview:
     st.subheader("Spike activity overview")
-    st.markdown("#### Time window")
-    full_overview = st.checkbox("Show full recording", value=True)
-    overview_range = None
-    if not full_overview:
-        rec_start = float(raw_t[0]) if has_raw_trace else float(analysis_spikes[0])
-        rec_end = float(raw_t[-1]) if has_raw_trace else float(analysis_spikes[-1])
-        default_width = min(10.0, rec_end - rec_start)
-        overview_range = st.slider(
-            "Visible time range (s)",
-            min_value=rec_start,
-            max_value=rec_end,
-            value=(rec_start, rec_start + default_width),
-            step=0.1,
-        )
-    fig_ov, panels_ov = plot_overview(analysis_spikes, bursts, analysis_freqs, overview_range)
-    _render_figure(
-        fig_ov,
-        "overview.png",
-        panels_ov,
-        "overview",
-        title="Raster and firing rate",
+    st.markdown("#### Raster and firing rate")
+    st.caption(
+        "Scroll or drag-select to zoom, drag to pan, double-click to reset. "
+        "Hover a burst marker (◆) above the raster for its id and extent."
     )
+    fig_ov, notes_ov = plot_overview(analysis_spikes, bursts, analysis_freqs)
+    st.plotly_chart(
+        fig_ov,
+        width="stretch",
+        config={"displaylogo": False, "scrollZoom": True},
+    )
+    for note in notes_ov:
+        st.caption(note)
 
 with tab_signal:
     signal_view = _select_subview(

@@ -3,8 +3,11 @@ from io import BytesIO
 import matplotlib.gridspec as gridspec
 import matplotlib.pyplot as plt
 import numpy as np
+import plotly.graph_objects as go
 import streamlit as st
+from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.transforms import Bbox
+from plotly.subplots import make_subplots
 
 # ── Plot colour palette (light-theme scientific) ───────────────────────────────
 C_BG    = '#FFFFFF'
@@ -72,8 +75,14 @@ def panel_to_bytes(fig, axes):
     """Crop and export just the region of one or more Axes (e.g. a panel plus its
     colorbar) from an already-drawn multi-panel figure — guarantees the individual
     export is pixel-identical to that panel in the combined download."""
-    fig.canvas.draw()
-    renderer = fig.canvas.get_renderer()
+    # `fig.canvas` isn't guaranteed to be an Agg canvas (e.g. Streamlit's own
+    # rendering can leave a figure attached to a canvas that lacks get_renderer,
+    # see AttributeError: 'FigureCanvasBase' object has no attribute
+    # 'get_renderer'), so draw with an explicit Agg canvas rather than relying
+    # on whatever canvas is currently attached.
+    canvas = FigureCanvasAgg(fig)
+    canvas.draw()
+    renderer = canvas.get_renderer()
     bbox = Bbox.union([ax.get_tightbbox(renderer) for ax in axes]) \
                .transformed(fig.dpi_scale_trans.inverted())
     buf = BytesIO()
@@ -98,53 +107,93 @@ def render_panel_downloads(fig, panels, base_filename):
             width="stretch",
         )
 
-def plot_overview(spike_times, bursts, freqs, x_range=None):
-    if x_range is None:
-        x_min, x_max = spike_times[0] - 0.3, spike_times[-1] + 0.3
+MAX_RASTER_POINTS = 20_000
+
+
+def plot_overview(spike_times, bursts, freqs, max_points=MAX_RASTER_POINTS):
+    """Interactive raster + firing-rate view (Plotly) — native pan/zoom/scroll
+    lets a multi-minute recording be explored directly instead of via a
+    pre-cropped static image. Burst spans are shaded on both panels; hovering
+    a burst's marker shows its id/extent/duration instead of permanent on-chart
+    text, which otherwise collides once bursts sit close together."""
+    display_notes = []
+    n = len(spike_times)
+    if n > max_points:
+        idx = select_display_indices(n, max_points)
+        plot_spikes = spike_times[idx]
+        plot_freqs = freqs[:n][idx]
+        display_notes.append(
+            f"Raster showing {len(idx):,} representative spikes from {n:,} "
+            "total for display performance; the firing-rate curve and burst "
+            "detection still use every spike."
+        )
     else:
-        x_min, x_max = x_range
-    visible_spikes = spike_times[(spike_times >= x_min) & (spike_times <= x_max)]
-    visible_bursts = [(k, b) for k, b in enumerate(bursts) if b['end'] >= x_min and b['start'] <= x_max]
+        plot_spikes = spike_times
+        plot_freqs = freqs[:n]
 
-    fig = plt.figure(figsize=(14, 6), facecolor=C_BG)
-    gs  = gridspec.GridSpec(2, 1, figure=fig, hspace=0.45,
-                            left=0.06, right=0.98, top=0.90, bottom=0.10)
-    fig.suptitle('Spike Raster and Firing Rate', color=C_TEXT, fontsize=13, fontweight='bold')
+    fig = make_subplots(
+        rows=2, cols=1, shared_xaxes=True,
+        row_heights=[0.4, 0.6], vertical_spacing=0.12,
+        subplot_titles=("Spike raster", "Instantaneous firing rate"),
+    )
 
-    ax1 = fig.add_subplot(gs[0])
-    style_ax(ax1, 'Spike Raster')
-    for _, b in visible_bursts:
-        ax1.axvspan(b['start'], b['end'], color=C_BURST, alpha=0.15)
-    if len(visible_spikes):
-        ax1.eventplot(visible_spikes, lineoffsets=0, linelengths=0.7,
-                      color=C_SPIKE, linewidths=1.2)
-    for k, b in visible_bursts:
-        mid = (b['start'] + b['end']) / 2
-        ax1.text(mid, 0.55, f"B{k+1}", color=C_BURST, fontsize=7, ha='center',
-                 fontweight='bold', transform=ax1.get_xaxis_transform())
-    ax1.set_yticks([])
-    ax1.set_xlim(x_min, x_max)
-    ax1.set_ylabel('Spikes', fontsize=9)
+    for b in bursts:
+        fig.add_shape(
+            type="rect", xref="x", yref="paper",
+            x0=b['start'], x1=b['end'], y0=0, y1=1,
+            fillcolor=C_BURST, opacity=0.12, line_width=0, layer="below",
+        )
 
-    ax2 = fig.add_subplot(gs[1])
-    style_ax(ax2, 'Instantaneous Firing Rate')
-    freq_vals = freqs[:len(spike_times)]
-    valid = (~np.isnan(freq_vals)) & (spike_times >= x_min) & (spike_times <= x_max)
-    if valid.any():
-        ax2.fill_between(spike_times[valid], freq_vals[valid],
-                         alpha=0.2, color=C_SPIKE)
-        ax2.plot(spike_times[valid], freq_vals[valid],
-                 color=C_SPIKE, linewidth=0.9)
-    for _, b in visible_bursts:
-        ax2.axvspan(b['start'], b['end'], color=C_BURST, alpha=0.10)
-    ax2.set_xlabel('Time (s)', fontsize=9)
-    ax2.set_ylabel('Freq (Hz)', fontsize=9)
-    ax2.set_xlim(x_min, x_max)
-    panels = [
-        ('raster',       'Spike Raster',               [ax1]),
-        ('firing_rate',  'Instantaneous Firing Rate',  [ax2]),
-    ]
-    return fig, panels
+    fig.add_trace(go.Scattergl(
+        x=plot_spikes, y=np.zeros_like(plot_spikes),
+        mode="markers",
+        marker=dict(symbol="line-ns", size=14, line=dict(width=1.3, color=C_SPIKE)),
+        hovertemplate="Spike @ %{x:.3f}s<extra></extra>",
+        showlegend=False,
+    ), row=1, col=1)
+
+    if bursts:
+        mids = [(b['start'] + b['end']) / 2 for b in bursts]
+        custom = [[i + 1, b['start'], b['end'], b['end'] - b['start']] for i, b in enumerate(bursts)]
+        fig.add_trace(go.Scatter(
+            x=mids, y=[0.8] * len(mids),
+            mode="markers",
+            marker=dict(symbol="diamond", size=9, color=C_BURST, line=dict(width=1, color=C_BG)),
+            customdata=custom,
+            hovertemplate=(
+                "<b>Burst %{customdata[0]}</b><br>"
+                "%{customdata[1]:.2f}s – %{customdata[2]:.2f}s<br>"
+                "Duration: %{customdata[3]:.2f}s<extra></extra>"
+            ),
+            showlegend=False,
+        ), row=1, col=1)
+
+    fig.update_yaxes(showticklabels=False, range=[-1, 1], title_text="Spikes", row=1, col=1)
+
+    valid = ~np.isnan(plot_freqs)
+    fig.add_trace(go.Scatter(
+        x=plot_spikes[valid], y=plot_freqs[valid],
+        mode="lines", line=dict(width=1.4, color=C_SPIKE),
+        fill="tozeroy", fillcolor="rgba(37, 99, 235, 0.15)",
+        hovertemplate="t=%{x:.3f}s<br>%{y:.1f} Hz<extra></extra>",
+        showlegend=False,
+    ), row=2, col=1)
+    fig.update_yaxes(title_text="Freq (Hz)", row=2, col=1)
+    fig.update_xaxes(title_text="Time (s)", row=2, col=1)
+
+    fig.update_xaxes(gridcolor=C_GRID, zeroline=False, showline=True, linecolor=C_GRID)
+    fig.update_yaxes(gridcolor=C_GRID, zeroline=False, showline=True, linecolor=C_GRID)
+    fig.update_annotations(font=dict(color=C_TEXT, size=13))
+    fig.update_layout(
+        height=560,
+        plot_bgcolor=C_PANEL,
+        paper_bgcolor=C_BG,
+        font=dict(color=C_TEXT, size=11),
+        hovermode="closest",
+        dragmode="zoom",
+        margin=dict(l=60, r=20, t=50, b=50),
+    )
+    return fig, display_notes
 
 def plot_isi(spike_times, isi_threshold_ms, secondary_threshold_ms=None):
     isis = np.diff(spike_times) * 1000
@@ -221,9 +270,12 @@ def plot_amplitude(
     ax_A.axvline(0, color=C_MUTED, linewidth=0.4, linestyle=':')
     ti = t_axis[mean_w.argmax()]
     ax_A.annotate('', xy=(ti, mean_w.max()), xytext=(ti, mean_w.min()),
-                  arrowprops=dict(arrowstyle='<->', color=C_ANNOT, lw=1.5))
+                  arrowprops=dict(arrowstyle='<->', color=C_ANNOT, lw=1.5), zorder=6)
     ax_A.text(ti + 0.08, (mean_w.max() + mean_w.min()) / 2,
-              f'{mean_w.max() - mean_w.min():.1f} µV', color=C_ANNOT, fontsize=8, va='center')
+              f'{mean_w.max() - mean_w.min():.1f} µV', color=C_ANNOT, fontsize=9,
+              fontweight='bold', va='center', zorder=7,
+              bbox=dict(facecolor=C_BG, edgecolor=C_ANNOT, linewidth=0.8,
+                        boxstyle='round,pad=0.25', alpha=0.85))
     ax_A.set_xlabel('Time (ms)', fontsize=9)
     ax_A.set_ylabel('Voltage (µV)', fontsize=9)
     ax_A.legend(fontsize=8, facecolor=C_PANEL, edgecolor=C_GRID)
